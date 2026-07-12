@@ -1,0 +1,316 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  NASDAQ IB-Quartils-Reversal (ORB-Ausbruch → Rejection → 25/75-Bruch)
+//
+//  Setup-Logik:
+//    1. Voraussetzung: Der Kurs muss die NY Opening Range (ORB) nach oben
+//       oder unten verlassen haben (Ausbruch über ORB Hoch bzw. unter ORB Tief).
+//    2. Der Kurs kehrt zurück in die Initial-Balance-Range und bleibt im
+//       äußeren Viertel hängen (zwischen IB-Tief und IB25 nach einem
+//       Ausbruch nach unten, bzw. zwischen IB75 und IB-Hoch nach einem
+//       Ausbruch nach oben) – er "rejected" also am ORB-Extrem.
+//    3. Erst wenn eine Kerze auf der Gegenseite über IB25 (long) bzw.
+//       unter IB75 (short) schließt, gilt das Setup als bestätigt:
+//         Long:  Einstieg long, Stop am Tages-Extrem des Spikes (tiefster Punkt
+//                seit IB-Beginn), Ziel IB75
+//         Short: Einstieg short, Stop am Tages-Extrem des Spikes (höchster
+//                Punkt seit IB-Beginn), Ziel IB25
+//    4. Kein neuer Einstieg nach einer einstellbaren Uhrzeit (Standard
+//       18:00 deutsche Zeit).
+//
+//  Zeichnet zusätzlich IB25/50/75, IB-Hoch/-Tief und die ORB-Box/-Linien
+//  wie der reine Zonen-Indikator.
+// ════════════════════════════════════════════════════════════════════════════
+strategy("IB Quartils-Reversal (ORB → Rejection → 25/75)", shorttitle="IB-Quartil-Rev",
+     overlay=true, initial_capital=25000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
+     calc_on_every_tick=false, pyramiding=0,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
+
+// ─── Zeiten (New York) ──────────────────────────────────────────────────────
+grpT     = "Zeiten (New York)"
+tz       = input.string("America/New_York", "Zeitzone", group=grpT)
+ibSess   = input.session("0930-1030", "Initial Balance (IB)", group=grpT)
+orSess   = input.session("0930-0945", "NY Opening Range (ORB)", group=grpT)
+dispSess = input.session("0930-1600", "Anzeigefenster (Level laufen bis hier)", group=grpT)
+
+// ─── Entry-Cutoff ───────────────────────────────────────────────────────────
+grpC       = "Entry-Cutoff"
+cutoffTz   = input.string("Europe/Berlin", "Zeitzone Cutoff", group=grpC)
+entrySess  = input.session("0000-1800", "Erlaubtes Entry-Fenster (kein neuer Einstieg danach)", group=grpC)
+
+// ─── Setup ──────────────────────────────────────────────────────────────────
+grpS            = "Setup"
+invalidateAtMid = input.bool(true, "Setup verwerfen, wenn Kurs die IB-Mittellinie (50%) erreicht", group=grpS)
+maxTradesPerDay = input.int(1, "Max. Trades pro Tag", minval=1, maxval=5, group=grpS)
+slBufferTicks   = input.int(4, "Stop-Puffer hinter Spike-Extrem (Ticks)", minval=0, group=grpS)
+eodFlatten      = input.bool(true, "Position/Orders zum Handelsschluss glattstellen", group=grpS)
+eodSess         = input.session("1555-1600", "Glattstellen-Fenster (NY)", group=grpS)
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+grpIB    = "Initial Balance – Darstellung"
+showFill = input.bool(true, "Quartils-Zonen einfärben", group=grpIB)
+colIbExt = input.color(color.aqua, "Farbe IB Hoch/Tief", group=grpIB)
+colIbMid = input.color(color.gray, "Farbe IB 50%", group=grpIB)
+colIbQ   = input.color(color.orange, "Farbe IB 25% / 75%", group=grpIB)
+
+grpOR    = "NY Opening Range – Darstellung"
+colOrHi  = input.color(color.green, "Farbe ORB Hoch", group=grpOR)
+colOrLo  = input.color(color.red, "Farbe ORB Tief", group=grpOR)
+colOrBox = input.color(color.new(color.yellow, 82), "Farbe ORB Box", group=grpOR)
+
+grpH       = "Allgemein"
+daysToShow = input.int(5, "Anzahl Tage im Chart", minval=1, maxval=20, group=grpH)
+showLabels = input.bool(true, "Beschriftungen anzeigen", group=grpH)
+
+// ─── Session-Flags ──────────────────────────────────────────────────────────
+inIb  = not na(time(timeframe.period, ibSess, tz))
+inOr  = not na(time(timeframe.period, orSess, tz))
+inDisp = not na(time(timeframe.period, dispSess, tz))
+inEod = not na(time(timeframe.period, eodSess, tz))
+inEntryWindow = not na(time(timeframe.period, entrySess, cutoffTz))
+
+// ─── Verwaltung der Zeichnungen (nur die letzten N Tage behalten) ───────────
+var array<line>     ibLns = array.new<line>()
+var array<label>    ibLbs = array.new<label>()
+var array<linefill> ibFls = array.new<linefill>()
+var array<line>     orLns = array.new<line>()
+var array<label>    orLbs = array.new<label>()
+var array<box>      orBxs = array.new<box>()
+
+f_pruneLn(array<line> a, int keep) =>
+    while a.size() > keep
+        line.delete(a.shift())
+f_pruneLb(array<label> a, int keep) =>
+    while a.size() > keep
+        label.delete(a.shift())
+f_pruneFl(array<linefill> a, int keep) =>
+    while a.size() > keep
+        linefill.delete(a.shift())
+f_pruneBx(array<box> a, int keep) =>
+    while a.size() > keep
+        box.delete(a.shift())
+
+// ─── Tages-Status ───────────────────────────────────────────────────────────
+var float ibH = na
+var float ibL = na
+var float orH = na
+var float orL = na
+var bool  ibFinal = false
+var bool  orFinal = false
+var int   ibStartIdx = na
+var int   orStartIdx = na
+var float sessLow  = na   // läuft (anders als ibL) den ganzen Tag weiter mit
+var float sessHigh = na   // → erfasst das tatsächliche Extrem des Spikes für den SL
+
+var bool  upBreakDone   = false   // ORB Hoch wurde einmal überschritten
+var bool  downBreakDone = false   // ORB Tief wurde einmal unterschritten
+var bool  watchLong     = false   // wartet auf Bruch über IB25
+var bool  watchShort    = false   // wartet auf Bruch unter IB75
+var int   tradesToday   = 0
+
+var line  lnIbHi = na
+var line  lnIb75 = na
+var line  lnIb50 = na
+var line  lnIb25 = na
+var line  lnIbLo = na
+var label lbIbHi = na
+var label lbIb75 = na
+var label lbIb50 = na
+var label lbIb25 = na
+var label lbIbLo = na
+var line  lnOrHi = na
+var line  lnOrLo = na
+var label lbOrHi = na
+var label lbOrLo = na
+var box   bxOr   = na
+
+// ─── Initial Balance: Aufbau ────────────────────────────────────────────────
+ibStart = inIb and not inIb[1]
+ibEnd   = not inIb and inIb[1]
+orStart = inOr and not inOr[1]
+orEnd   = not inOr and inOr[1]
+
+if ibStart
+    f_pruneLn(ibLns, (daysToShow - 1) * 5)
+    f_pruneLb(ibLbs, (daysToShow - 1) * 5)
+    f_pruneFl(ibFls, (daysToShow - 1) * 4)
+    ibH := high
+    ibL := low
+    ibFinal := false
+    ibStartIdx := bar_index
+    sessLow  := low
+    sessHigh := high
+    lnIbHi := na, lnIb75 := na, lnIb50 := na, lnIb25 := na, lnIbLo := na
+    lbIbHi := na, lbIb75 := na, lbIb50 := na, lbIb25 := na, lbIbLo := na
+    // Neuer Handelstag beginnt spätestens mit der IB → gesamten Setup-Status zurücksetzen
+    upBreakDone := false, downBreakDone := false
+    watchLong := false, watchShort := false
+    tradesToday := 0
+else
+    sessLow  := math.min(sessLow, low)
+    sessHigh := math.max(sessHigh, high)
+    if inIb
+        ibH := math.max(ibH, high)
+        ibL := math.min(ibL, low)
+
+if ibEnd
+    ibFinal := true
+
+ibRng = ibH - ibL
+ib25  = ibL + 0.25 * ibRng
+ib50  = ibL + 0.50 * ibRng
+ib75  = ibL + 0.75 * ibRng
+
+if na(lnIbHi) and not na(ibRng) and ibEnd
+    x1 = ibStartIdx
+    lnIbHi := line.new(x1, ibH, bar_index, ibH, color=colIbExt, width=2)
+    lnIb75 := line.new(x1, ib75, bar_index, ib75, color=colIbQ, style=line.style_dashed)
+    lnIb50 := line.new(x1, ib50, bar_index, ib50, color=colIbMid)
+    lnIb25 := line.new(x1, ib25, bar_index, ib25, color=colIbQ, style=line.style_dashed)
+    lnIbLo := line.new(x1, ibL, bar_index, ibL, color=colIbExt, width=2)
+    ibLns.push(lnIbHi), ibLns.push(lnIb75), ibLns.push(lnIb50)
+    ibLns.push(lnIb25), ibLns.push(lnIbLo)
+    if showLabels
+        lbIbHi := label.new(bar_index, ibH, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbExt, size=size.small)
+        lbIb75 := label.new(bar_index, ib75, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbQ, size=size.small)
+        lbIb50 := label.new(bar_index, ib50, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbMid, size=size.small)
+        lbIb25 := label.new(bar_index, ib25, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbQ, size=size.small)
+        lbIbLo := label.new(bar_index, ibL, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbExt, size=size.small)
+        ibLbs.push(lbIbHi), ibLbs.push(lbIb75), ibLbs.push(lbIb50)
+        ibLbs.push(lbIb25), ibLbs.push(lbIbLo)
+    if showFill
+        ibFls.push(linefill.new(lnIbHi, lnIb75, color.new(color.green, 92)))
+        ibFls.push(linefill.new(lnIb75, lnIb50, color.new(color.gray, 97)))
+        ibFls.push(linefill.new(lnIb50, lnIb25, color.new(color.gray, 97)))
+        ibFls.push(linefill.new(lnIb25, lnIbLo, color.new(color.red, 92)))
+
+if not na(lnIbHi) and inDisp
+    line.set_x2(lnIbHi, bar_index), line.set_x2(lnIb75, bar_index)
+    line.set_x2(lnIb50, bar_index), line.set_x2(lnIb25, bar_index)
+    line.set_x2(lnIbLo, bar_index)
+    if showLabels and not na(lbIbHi)
+        label.set_xy(lbIbHi, bar_index, ibH)
+        label.set_xy(lbIb75, bar_index, ib75)
+        label.set_xy(lbIb50, bar_index, ib50)
+        label.set_xy(lbIb25, bar_index, ib25)
+        label.set_xy(lbIbLo, bar_index, ibL)
+        label.set_text(lbIbHi, "IB Hoch  " + str.tostring(ibH, format.mintick))
+        label.set_text(lbIb75, "IB 75  " + str.tostring(ib75, format.mintick))
+        label.set_text(lbIb50, "IB 50  " + str.tostring(ib50, format.mintick))
+        label.set_text(lbIb25, "IB 25  " + str.tostring(ib25, format.mintick))
+        label.set_text(lbIbLo, "IB Tief  " + str.tostring(ibL, format.mintick))
+
+// ─── NY Opening Range: Aufbau ───────────────────────────────────────────────
+if orStart
+    f_pruneBx(orBxs, daysToShow - 1)
+    f_pruneLn(orLns, (daysToShow - 1) * 2)
+    f_pruneLb(orLbs, (daysToShow - 1) * 2)
+    orH := high
+    orL := low
+    orFinal := false
+    orStartIdx := bar_index
+    lnOrHi := na, lnOrLo := na
+    lbOrHi := na, lbOrLo := na
+    bxOr := box.new(bar_index, high, bar_index, low, bgcolor=colOrBox,
+         border_color=color.new(colOrBox, 40))
+    orBxs.push(bxOr)
+else if inOr
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+
+if inOr and not na(bxOr)
+    box.set_top(bxOr, orH)
+    box.set_bottom(bxOr, orL)
+    box.set_right(bxOr, bar_index)
+
+if orEnd
+    orFinal := true
+    lnOrHi := line.new(orStartIdx, orH, bar_index, orH, color=colOrHi, width=2)
+    lnOrLo := line.new(orStartIdx, orL, bar_index, orL, color=colOrLo, width=2)
+    orLns.push(lnOrHi), orLns.push(lnOrLo)
+    if showLabels
+        lbOrHi := label.new(bar_index, orH, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colOrHi, size=size.small)
+        lbOrLo := label.new(bar_index, orL, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colOrLo, size=size.small)
+        orLbs.push(lbOrHi), orLbs.push(lbOrLo)
+
+if not na(lnOrHi) and inDisp
+    line.set_x2(lnOrHi, bar_index)
+    line.set_x2(lnOrLo, bar_index)
+    if showLabels and not na(lbOrHi)
+        label.set_xy(lbOrHi, bar_index, orH)
+        label.set_xy(lbOrLo, bar_index, orL)
+        label.set_text(lbOrHi, "ORB Hoch  " + str.tostring(orH, format.mintick))
+        label.set_text(lbOrLo, "ORB Tief  " + str.tostring(orL, format.mintick))
+
+// ─── Setup-Logik ────────────────────────────────────────────────────────────
+// 1) Voraussetzung: ORB-Ausbruch (Wick reicht, klassische Breakout-Definition)
+if orFinal and not upBreakDone and high > orH
+    upBreakDone := true
+if orFinal and not downBreakDone and low < orL
+    downBreakDone := true
+
+// 2) Rückkehr in die Range → Beobachtung des äußeren Viertels aktivieren
+if ibFinal and downBreakDone and not watchLong and close > orL
+    watchLong := true
+if ibFinal and upBreakDone and not watchShort and close < orH
+    watchShort := true
+
+// Setup verwerfen, wenn der Kurs die Struktur verlässt (Mittellinie oder Gegenseite)
+if watchLong and ((invalidateAtMid and close > ib50) or close < ibL)
+    watchLong := false
+if watchShort and ((invalidateAtMid and close < ib50) or close > ibH)
+    watchShort := false
+
+// 3) Bestätigter Bruch der 25/75-Linie auf Kerzen-Close → Einstieg
+flat = strategy.position_size == 0
+canTradeToday = tradesToday < maxTradesPerDay
+
+longTrigger  = watchLong  and ibFinal and flat and canTradeToday and inEntryWindow and ta.crossover(close, ib25)
+shortTrigger = watchShort and ibFinal and flat and canTradeToday and inEntryWindow and ta.crossunder(close, ib75)
+
+if longTrigger
+    slPrice = sessLow - slBufferTicks * syminfo.mintick
+    strategy.entry("Long", strategy.long)
+    strategy.exit("X Long", "Long", stop=slPrice, limit=ib75)
+    watchLong := false
+    tradesToday += 1
+
+if shortTrigger
+    slPrice = sessHigh + slBufferTicks * syminfo.mintick
+    strategy.entry("Short", strategy.short)
+    strategy.exit("X Short", "Short", stop=slPrice, limit=ib25)
+    watchShort := false
+    tradesToday += 1
+
+// ─── Glattstellen zum Handelsschluss ────────────────────────────────────────
+if eodFlatten
+    if inEod and not inEod[1]
+        strategy.cancel_all()
+    if inEod
+        strategy.close_all(comment="EOD Flat")
+
+// ─── Einstiegs-Marker ───────────────────────────────────────────────────────
+plotshape(longTrigger, title="Long Einstieg", style=shape.triangleup, location=location.belowbar,
+     color=color.lime, size=size.small)
+plotshape(shortTrigger, title="Short Einstieg", style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.small)
+
+// ─── Alerts ─────────────────────────────────────────────────────────────────
+alertcondition(longTrigger, "IB-Quartil Long Einstieg", "Rejection an ORB Tief + Bruch über IB25 → Long")
+alertcondition(shortTrigger, "IB-Quartil Short Einstieg", "Rejection an ORB Hoch + Bruch unter IB75 → Short")
+
+// ─── Session-Hintergrund ────────────────────────────────────────────────────
+bgcolor(inOr ? color.new(color.yellow, 96) : inIb ? color.new(color.blue, 96) : na,
+     title="Session-Hintergrund")

@@ -25,6 +25,44 @@ ORB Hoch/Tief sowie IB Hoch/Tief nach Abschluss der jeweiligen Range.
 
 ---
 
+## Strategie: IB Quartils-Reversal (ORB-Ausbruch → Rejection → 25/75-Bruch)
+
+**Datei:** `IB_ORB_Quarter_Reversal_Strategy.pine`
+**Empfohlener Chart:** NQ/MNQ (oder QQQ), 1–5-Minuten-Timeframe.
+
+Setzt das im Chat besprochene Setup ("Spike → Konsolidierung im
+äußeren Viertel → Break of Structure → Reversal zum Ursprung des
+Spikes") direkt auf die IB/ORB-Zonen um und backtestet es im Strategy
+Tester. Zeichnet dieselben IB25/50/75- und ORB-Level wie der reine
+Zonen-Indikator.
+
+**Setup-Logik:**
+
+1. **Voraussetzung:** Der Kurs muss die NY Opening Range (ORB) einmal
+   nach oben oder unten verlassen haben (Ausbruch/"Spike" über ORB
+   Hoch bzw. unter ORB Tief).
+2. Der Kurs kehrt in die IB-Range zurück und bleibt im äußeren Viertel
+   hängen (zwischen IB-Tief und IB25 nach einem Ausbruch nach unten,
+   bzw. zwischen IB75 und IB-Hoch nach einem Ausbruch nach oben) – er
+   "rejected" also am ORB-Extrem. Das Setup wird verworfen, sobald der
+   Kurs die IB-Mittellinie erreicht oder das IB-Extrem selbst bricht.
+3. Erst wenn eine Kerze **auf Schlusskurs-Basis** über IB25 (long)
+   bzw. unter IB75 (short) schließt ("Break of Structure"), gilt das
+   Setup als bestätigt:
+   - **Long:** Einstieg long, Stop am Tages-Extrem des Spikes
+     (tiefster Punkt seit IB-Beginn, mit Tick-Puffer), Ziel IB75.
+   - **Short:** Einstieg short, Stop am Tages-Extrem des Spikes
+     (höchster Punkt seit IB-Beginn, mit Tick-Puffer), Ziel IB25.
+4. Kein neuer Einstieg nach einer einstellbaren Uhrzeit (Standard
+   18:00 deutsche Zeit), max. Trades pro Tag einstellbar (Standard 1).
+5. Optionales Glattstellen zum NY-Handelsschluss (15:55–16:00).
+
+Alle Zeiten, der SL-Tick-Puffer, das Invalidierungs-Verhalten sowie
+alle Darstellungsoptionen sind über Inputs anpassbar. Enthält Alerts
+für Long- und Short-Einstieg.
+
+---
+
 # IB 25% Retracement + ORB Breakout Strategie (TradingView / Pine v6)
 
 Strategie-Script für den TradingView Strategy Tester, basierend auf dem
