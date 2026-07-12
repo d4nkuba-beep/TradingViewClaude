@@ -1,0 +1,221 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  IB 25% Retracement + ORB Breakout (VWAP-Filter)
+//
+//  Modus "Retracement" (Setup aus den Discord-Screenshots):
+//    - VWAP am 9:30-Open (New York) verankern
+//    - Initial Balance (IB) = Opening Range 09:30–10:30
+//    - Einstieg per Limit-Order am 25%-Retracement der IB-Range,
+//      Stop am 50%-Retracement, Target am IB-Extrem (1:1)
+//    - Nur handeln, wenn der VWAP in Trade-Richtung geneigt ist und der
+//      Preis nicht zu oft um den VWAP "gechoppt" hat
+//    - Einstieg frühestens 10 Min vor IB-Ende, keine neuen Entries nach
+//      12:00 oder nachdem das IB-Hoch/-Tief gesweept wurde
+//
+//  Modus "ORB-Breakout" (zu prüfende Variante):
+//    - Sobald die Opening Range um 10:30 steht, Stop-Order über dem IB-Hoch
+//      bzw. unter dem IB-Tief (optional nur in VWAP-Richtung)
+//    - Stop-Loss wahlweise IB-Mitte, Gegenseite oder % der Range,
+//      Take-Profit als R-Multiple
+//
+//  Modus "Beide": Retracement-Limit im Range-Inneren + Breakout-Stop außen.
+//  Füllt eine Seite, wird die andere automatisch gestrichen.
+// ════════════════════════════════════════════════════════════════════════════
+strategy("IB 25% Retrace + ORB Breakout (VWAP)", shorttitle="IB-ORB",
+     overlay=true, initial_capital=25000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
+     calc_on_every_tick=false, pyramiding=0)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
+
+// ─── Sessions (Börsenzeit New York) ─────────────────────────────────────────
+grpS    = "Sessions (New York Zeit)"
+tz      = input.string("America/New_York", "Zeitzone", group=grpS)
+ibSess  = input.session("0930-1030", "Initial Balance / Opening Range", group=grpS)
+retSess = input.session("1020-1200", "Entry-Fenster Retracement (ab 10 Min vor IB-Ende)", group=grpS)
+orbSess = input.session("1030-1200", "Entry-Fenster ORB-Breakout", group=grpS)
+eodSess = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+// ─── Modus ──────────────────────────────────────────────────────────────────
+mode = input.string("Beide", "Handelsmodus",
+     options=["Nur Retracement", "Nur ORB-Breakout", "Beide"], group="Modus")
+
+// ─── VWAP-Filter ────────────────────────────────────────────────────────────
+grpV          = "VWAP-Filter"
+useVwapFilter = input.bool(true, "VWAP muss in Trade-Richtung geneigt sein", group=grpV)
+slopeBars     = input.int(10, "Bars zur Messung der VWAP-Steigung", minval=1, group=grpV)
+useChopFilter = input.bool(true, "Chop-Filter (kein Trade bei zu vielen VWAP-Kreuzungen)", group=grpV)
+maxCrosses    = input.int(6, "Max. Kreuzungen Preis/VWAP seit 9:30", minval=0, group=grpV)
+
+// ─── Retracement-Setup ──────────────────────────────────────────────────────
+grpR          = "Retracement-Setup (IB 25%)"
+entryPct      = input.float(25.0, "Entry: Retracement der IB-Range (%)", minval=5, maxval=95, group=grpR) / 100.0
+stopPct       = input.float(50.0, "Stop: Retracement der IB-Range (%)", minval=10, maxval=100, group=grpR) / 100.0
+cancelOnSweep = input.bool(true, "Keine Entries mehr, sobald IB-Hoch/-Tief gesweept wurde", group=grpR)
+
+// ─── ORB-Breakout-Setup ─────────────────────────────────────────────────────
+grpO           = "ORB-Breakout-Setup"
+orbOffsetTicks = input.int(2, "Breakout-Offset über/unter der IB (Ticks)", minval=0, group=grpO)
+orbBothSides   = input.bool(false, "Beide Richtungen handeln (sonst nur in VWAP-Richtung)", group=grpO)
+orbStopMode    = input.string("IB-Mitte", "Stop-Loss",
+     options=["IB-Mitte", "Gegenseite der IB", "% der IB-Range"], group=grpO)
+orbStopPct     = input.float(50.0, "Stop-Distanz, falls '% der IB-Range' (%)", minval=5, maxval=200, group=grpO) / 100.0
+orbTpR         = input.float(1.0, "Take-Profit (R-Multiple)", minval=0.25, step=0.25, group=grpO)
+orbMaxTrades   = input.int(1, "Max. Breakout-Trades pro Tag", minval=1, group=grpO)
+
+// ─── Session-Flags ──────────────────────────────────────────────────────────
+inIb  = not na(time(timeframe.period, ibSess, tz))
+inRet = not na(time(timeframe.period, retSess, tz))
+inOrb = not na(time(timeframe.period, orbSess, tz))
+inEod = not na(time(timeframe.period, eodSess, tz))
+
+// ─── Tages-Status ───────────────────────────────────────────────────────────
+var float ibHigh     = na
+var float ibLow      = na
+var bool  ibDone     = false
+var bool  swept      = false
+var bool  retTraded  = false
+var int   orbTrades  = 0
+var float cumPV      = na
+var float cumV       = na
+var int   crossCount = 0
+
+ibStart = inIb and not inIb[1]
+if ibStart
+    ibHigh     := high
+    ibLow      := low
+    ibDone     := false
+    swept      := false
+    retTraded  := false
+    orbTrades  := 0
+    cumPV      := 0.0
+    cumV       := 0.0
+    crossCount := 0
+else if inIb
+    ibHigh := math.max(ibHigh, high)
+    ibLow  := math.min(ibLow, low)
+
+if not inIb and inIb[1]
+    ibDone := true
+
+// ─── VWAP, am 9:30-Open verankert ───────────────────────────────────────────
+if not na(cumPV)
+    cumPV += hlc3 * volume
+    cumV  += volume
+vwapA = not na(cumV) and cumV > 0 ? cumPV / cumV : na
+
+crossSig = ta.cross(close, nz(vwapA, close))
+if not na(vwapA) and crossSig
+    crossCount += 1
+
+vwapSlope = not na(vwapA) ? vwapA - vwapA[slopeBars] : na
+
+// Sweep des IB-Extrems nach Abschluss der Opening Range
+if ibDone and not na(ibHigh) and (high > ibHigh or low < ibLow)
+    swept := true
+
+// ─── Filter & Richtung ──────────────────────────────────────────────────────
+rng     = ibHigh - ibLow
+chopOk  = not useChopFilter or crossCount <= maxCrosses
+slopeUp = not na(vwapSlope) and vwapSlope > 0
+slopeDn = not na(vwapSlope) and vwapSlope < 0
+
+longBias  = not na(vwapA) and close > vwapA and (not useVwapFilter or slopeUp)
+shortBias = not na(vwapA) and close < vwapA and (not useVwapFilter or slopeDn)
+
+flat    = strategy.position_size == 0
+modeRet = mode != "Nur ORB-Breakout"
+modeOrb = mode != "Nur Retracement"
+
+lastEntryId = strategy.opentrades > 0 ? strategy.opentrades.entry_id(strategy.opentrades - 1) : ""
+
+// Trades pro Tag zählen (getrennt nach Setup)
+justEntered = strategy.position_size != 0 and strategy.position_size[1] == 0
+if justEntered
+    if str.startswith(lastEntryId, "Retrace")
+        retTraded := true
+    if str.startswith(lastEntryId, "ORB")
+        orbTrades += 1
+
+// ─── Retracement-Orders ─────────────────────────────────────────────────────
+retLongId  = "Retrace Long"
+retShortId = "Retrace Short"
+canRet = modeRet and inRet and flat and not retTraded and not na(rng) and rng > 0
+     and chopOk and not (cancelOnSweep and swept) and not inEod
+
+if canRet and shortBias
+    e = ibLow + entryPct * rng
+    s = ibLow + stopPct  * rng
+    strategy.entry(retShortId, strategy.short, limit=e)
+    strategy.exit("X " + retShortId, retShortId, stop=s, limit=ibLow)
+    strategy.cancel(retLongId)
+else if canRet and longBias
+    e = ibHigh - entryPct * rng
+    s = ibHigh - stopPct  * rng
+    strategy.entry(retLongId, strategy.long, limit=e)
+    strategy.exit("X " + retLongId, retLongId, stop=s, limit=ibHigh)
+    strategy.cancel(retShortId)
+else
+    strategy.cancel(retLongId)
+    strategy.cancel(retShortId)
+
+// ─── ORB-Breakout-Orders ────────────────────────────────────────────────────
+orbLongId  = "ORB Long"
+orbShortId = "ORB Short"
+canOrb = modeOrb and inOrb and ibDone and flat and orbTrades < orbMaxTrades
+     and not na(rng) and rng > 0 and chopOk and not inEod
+off = orbOffsetTicks * syminfo.mintick
+
+allowOrbLong  = orbBothSides or not useVwapFilter or slopeUp
+allowOrbShort = orbBothSides or not useVwapFilter or slopeDn
+
+if canOrb and allowOrbLong
+    strategy.entry(orbLongId, strategy.long, stop=ibHigh + off,
+         oca_name="ORB", oca_type=strategy.oca.cancel)
+else
+    strategy.cancel(orbLongId)
+
+if canOrb and allowOrbShort
+    strategy.entry(orbShortId, strategy.short, stop=ibLow - off,
+         oca_name="ORB", oca_type=strategy.oca.cancel)
+else
+    strategy.cancel(orbShortId)
+
+// Exits für offene Breakout-Position
+avgPrice = strategy.position_avg_price
+if strategy.position_size > 0 and lastEntryId == orbLongId
+    stopL = orbStopMode == "IB-Mitte" ? (ibHigh + ibLow) / 2 :
+         orbStopMode == "Gegenseite der IB" ? ibLow :
+         avgPrice - orbStopPct * rng
+    strategy.exit("X " + orbLongId, orbLongId, stop=stopL,
+         limit=avgPrice + orbTpR * (avgPrice - stopL))
+if strategy.position_size < 0 and lastEntryId == orbShortId
+    stopS = orbStopMode == "IB-Mitte" ? (ibHigh + ibLow) / 2 :
+         orbStopMode == "Gegenseite der IB" ? ibHigh :
+         avgPrice + orbStopPct * rng
+    strategy.exit("X " + orbShortId, orbShortId, stop=stopS,
+         limit=avgPrice - orbTpR * (stopS - avgPrice))
+
+// ─── Glattstellen zum Handelsschluss ────────────────────────────────────────
+if inEod and not inEod[1]
+    strategy.cancel_all()
+if inEod
+    strategy.close_all(comment="EOD Flat")
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+plot(vwapA, "VWAP (9:30 verankert)", color=color.orange, linewidth=2)
+
+showIb = ibDone and not na(ibHigh)
+plot(showIb ? ibHigh : na, "IB Hoch", color=color.aqua, style=plot.style_linebr)
+plot(showIb ? ibLow : na, "IB Tief", color=color.aqua, style=plot.style_linebr)
+plot(showIb ? (ibHigh + ibLow) / 2 : na, "IB Mitte (50%)",
+     color=color.new(color.gray, 30), style=plot.style_linebr)
+plot(showIb ? ibLow + entryPct * rng : na, "25% über IB-Tief (Short-Entry)",
+     color=color.new(color.red, 50), style=plot.style_linebr)
+plot(showIb ? ibHigh - entryPct * rng : na, "25% unter IB-Hoch (Long-Entry)",
+     color=color.new(color.green, 50), style=plot.style_linebr)
+
+bgcolor(inIb ? color.new(color.blue, 94) : na, title="Opening Range")
+bgcolor(inRet and not inIb ? color.new(color.yellow, 96) : na, title="Entry-Fenster")
