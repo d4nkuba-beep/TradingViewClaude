@@ -1,0 +1,250 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  NASDAQ IB-Zonen + NY Opening Range (Visualisierung)
+//
+//  Zeichnet pro Handelstag:
+//    1. Initial Balance (IB) als horizontale Level:
+//       IB Hoch (100%), IB75, IB50, IB25, IB Tief (0%)
+//       – Session frei einstellbar (Standard 09:30–10:30 New York)
+//       – optional live während der Bildung, Zonen optional eingefärbt
+//    2. NY Opening Range (ORB) als Box (Standard: erste 15 Min, 09:30–09:45)
+//       – ORB Hoch/Tief laufen danach optional als Linien weiter
+//
+//  Alle Level laufen bis zum Ende des Anzeigefensters (Standard 16:00 NY).
+//  Alerts: Bruch von ORB Hoch/Tief sowie IB Hoch/Tief nach Abschluss.
+// ════════════════════════════════════════════════════════════════════════════
+indicator("NASDAQ IB-Zonen + NY Opening Range", shorttitle="IB+ORB Zonen",
+     overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
+
+// ─── Zeiten ─────────────────────────────────────────────────────────────────
+grpT     = "Zeiten (New York)"
+tz       = input.string("America/New_York", "Zeitzone", group=grpT)
+ibSess   = input.session("0930-1030", "Initial Balance (IB)", group=grpT)
+orSess   = input.session("0930-0945", "NY Opening Range (ORB)", group=grpT)
+dispSess = input.session("0930-1600", "Anzeigefenster (Level laufen bis hier)", group=grpT)
+
+// ─── Initial Balance ────────────────────────────────────────────────────────
+grpIB    = "Initial Balance"
+showIb   = input.bool(true, "IB-Level anzeigen", group=grpIB)
+ibLive   = input.bool(true, "Live während der Bildung aktualisieren", group=grpIB)
+showFill = input.bool(true, "Quartils-Zonen einfärben", group=grpIB)
+colIbExt = input.color(color.aqua, "Farbe IB Hoch/Tief", group=grpIB)
+colIbMid = input.color(color.gray, "Farbe IB 50%", group=grpIB)
+colIbQ   = input.color(color.orange, "Farbe IB 25% / 75%", group=grpIB)
+
+// ─── Opening Range ──────────────────────────────────────────────────────────
+grpOR    = "NY Opening Range"
+showOr   = input.bool(true, "Opening Range anzeigen", group=grpOR)
+orExtend = input.bool(true, "ORB Hoch/Tief nach Range-Ende weiterführen", group=grpOR)
+colOrHi  = input.color(color.green, "Farbe ORB Hoch", group=grpOR)
+colOrLo  = input.color(color.red, "Farbe ORB Tief", group=grpOR)
+colOrBox = input.color(color.new(color.yellow, 82), "Farbe ORB Box", group=grpOR)
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+grpH       = "Darstellung"
+daysToShow = input.int(5, "Anzahl Tage im Chart", minval=1, maxval=20, group=grpH)
+showLabels = input.bool(true, "Beschriftungen anzeigen", group=grpH)
+
+// ─── Session-Flags ──────────────────────────────────────────────────────────
+inIb   = not na(time(timeframe.period, ibSess, tz))
+inOr   = not na(time(timeframe.period, orSess, tz))
+inDisp = not na(time(timeframe.period, dispSess, tz))
+
+ibStart = inIb and not inIb[1]
+ibEnd   = not inIb and inIb[1]
+orStart = inOr and not inOr[1]
+orEnd   = not inOr and inOr[1]
+
+// ─── Verwaltung der Zeichnungen (nur die letzten N Tage behalten) ───────────
+var array<line>     ibLns = array.new<line>()
+var array<label>    ibLbs = array.new<label>()
+var array<linefill> ibFls = array.new<linefill>()
+var array<line>     orLns = array.new<line>()
+var array<label>    orLbs = array.new<label>()
+var array<box>      orBxs = array.new<box>()
+
+f_pruneLn(array<line> a, int keep) =>
+    while a.size() > keep
+        line.delete(a.shift())
+
+f_pruneLb(array<label> a, int keep) =>
+    while a.size() > keep
+        label.delete(a.shift())
+
+f_pruneFl(array<linefill> a, int keep) =>
+    while a.size() > keep
+        linefill.delete(a.shift())
+
+f_pruneBx(array<box> a, int keep) =>
+    while a.size() > keep
+        box.delete(a.shift())
+
+// ─── Tages-Status ───────────────────────────────────────────────────────────
+var float ibH = na
+var float ibL = na
+var float orH = na
+var float orL = na
+var bool  ibFinal = false
+var bool  orFinal = false
+var int   ibStartIdx = na
+var int   orStartIdx = na
+
+// Handles der heutigen Zeichnungen
+var line  lnIbHi  = na
+var line  lnIb75  = na
+var line  lnIb50  = na
+var line  lnIb25  = na
+var line  lnIbLo  = na
+var label lbIbHi  = na
+var label lbIb75  = na
+var label lbIb50  = na
+var label lbIb25  = na
+var label lbIbLo  = na
+var line  lnOrHi  = na
+var line  lnOrLo  = na
+var label lbOrHi  = na
+var label lbOrLo  = na
+var box   bxOr    = na
+
+// ─── Initial Balance: Aufbau ────────────────────────────────────────────────
+if ibStart
+    f_pruneLn(ibLns, (daysToShow - 1) * 5)
+    f_pruneLb(ibLbs, (daysToShow - 1) * 5)
+    f_pruneFl(ibFls, (daysToShow - 1) * 4)
+    ibH        := high
+    ibL        := low
+    ibFinal    := false
+    ibStartIdx := bar_index
+    lnIbHi := na, lnIb75 := na, lnIb50 := na, lnIb25 := na, lnIbLo := na
+    lbIbHi := na, lbIb75 := na, lbIb50 := na, lbIb25 := na, lbIbLo := na
+else if inIb
+    ibH := math.max(ibH, high)
+    ibL := math.min(ibL, low)
+
+if ibEnd
+    ibFinal := true
+
+ibRng = ibH - ibL
+ib25  = ibL + 0.25 * ibRng
+ib50  = ibL + 0.50 * ibRng
+ib75  = ibL + 0.75 * ibRng
+
+// IB-Zeichnungen anlegen: live ab Session-Start oder erst nach Session-Ende
+createIbNow = showIb and na(lnIbHi) and not na(ibRng)
+     and ((ibLive and ibStart) or (not ibLive and ibEnd))
+if createIbNow
+    x1 = ibLive ? bar_index : ibStartIdx
+    lnIbHi := line.new(x1, ibH, bar_index, ibH, color=colIbExt, width=2)
+    lnIb75 := line.new(x1, ib75, bar_index, ib75, color=colIbQ, style=line.style_dashed)
+    lnIb50 := line.new(x1, ib50, bar_index, ib50, color=colIbMid)
+    lnIb25 := line.new(x1, ib25, bar_index, ib25, color=colIbQ, style=line.style_dashed)
+    lnIbLo := line.new(x1, ibL, bar_index, ibL, color=colIbExt, width=2)
+    ibLns.push(lnIbHi), ibLns.push(lnIb75), ibLns.push(lnIb50)
+    ibLns.push(lnIb25), ibLns.push(lnIbLo)
+    if showLabels
+        lbIbHi := label.new(bar_index, ibH, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbExt, size=size.small)
+        lbIb75 := label.new(bar_index, ib75, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbQ, size=size.small)
+        lbIb50 := label.new(bar_index, ib50, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbMid, size=size.small)
+        lbIb25 := label.new(bar_index, ib25, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbQ, size=size.small)
+        lbIbLo := label.new(bar_index, ibL, "", style=label.style_label_left,
+             color=color.new(color.black, 100), textcolor=colIbExt, size=size.small)
+        ibLbs.push(lbIbHi), ibLbs.push(lbIb75), ibLbs.push(lbIb50)
+        ibLbs.push(lbIb25), ibLbs.push(lbIbLo)
+    if showFill
+        ibFls.push(linefill.new(lnIbHi, lnIb75, color.new(color.green, 92)))
+        ibFls.push(linefill.new(lnIb75, lnIb50, color.new(color.gray, 97)))
+        ibFls.push(linefill.new(lnIb50, lnIb25, color.new(color.gray, 97)))
+        ibFls.push(linefill.new(lnIb25, lnIbLo, color.new(color.red, 92)))
+
+// IB-Zeichnungen fortschreiben (Level live nachziehen + nach rechts verlängern)
+if showIb and not na(lnIbHi) and (inIb or inDisp)
+    if inIb and ibLive
+        line.set_y1(lnIbHi, ibH),  line.set_y2(lnIbHi, ibH)
+        line.set_y1(lnIb75, ib75), line.set_y2(lnIb75, ib75)
+        line.set_y1(lnIb50, ib50), line.set_y2(lnIb50, ib50)
+        line.set_y1(lnIb25, ib25), line.set_y2(lnIb25, ib25)
+        line.set_y1(lnIbLo, ibL),  line.set_y2(lnIbLo, ibL)
+    line.set_x2(lnIbHi, bar_index), line.set_x2(lnIb75, bar_index)
+    line.set_x2(lnIb50, bar_index), line.set_x2(lnIb25, bar_index)
+    line.set_x2(lnIbLo, bar_index)
+    if showLabels and not na(lbIbHi)
+        label.set_xy(lbIbHi, bar_index, ibH)
+        label.set_xy(lbIb75, bar_index, ib75)
+        label.set_xy(lbIb50, bar_index, ib50)
+        label.set_xy(lbIb25, bar_index, ib25)
+        label.set_xy(lbIbLo, bar_index, ibL)
+        label.set_text(lbIbHi, "IB Hoch  " + str.tostring(ibH, format.mintick))
+        label.set_text(lbIb75, "IB 75  " + str.tostring(ib75, format.mintick))
+        label.set_text(lbIb50, "IB 50  " + str.tostring(ib50, format.mintick))
+        label.set_text(lbIb25, "IB 25  " + str.tostring(ib25, format.mintick))
+        label.set_text(lbIbLo, "IB Tief  " + str.tostring(ibL, format.mintick))
+
+// ─── NY Opening Range: Aufbau ───────────────────────────────────────────────
+if orStart
+    f_pruneBx(orBxs, daysToShow - 1)
+    f_pruneLn(orLns, (daysToShow - 1) * 2)
+    f_pruneLb(orLbs, (daysToShow - 1) * 2)
+    orH        := high
+    orL        := low
+    orFinal    := false
+    orStartIdx := bar_index
+    lnOrHi := na, lnOrLo := na
+    lbOrHi := na, lbOrLo := na
+    bxOr   := na
+    if showOr
+        bxOr := box.new(bar_index, high, bar_index, low, bgcolor=colOrBox,
+             border_color=color.new(colOrBox, 40))
+        orBxs.push(bxOr)
+else if inOr
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+
+if inOr and showOr and not na(bxOr)
+    box.set_top(bxOr, orH)
+    box.set_bottom(bxOr, orL)
+    box.set_right(bxOr, bar_index)
+
+// Nach Abschluss der Opening Range: Hoch/Tief als Linien weiterführen
+if orEnd
+    orFinal := true
+    if showOr and orExtend
+        lnOrHi := line.new(orStartIdx, orH, bar_index, orH, color=colOrHi, width=2)
+        lnOrLo := line.new(orStartIdx, orL, bar_index, orL, color=colOrLo, width=2)
+        orLns.push(lnOrHi), orLns.push(lnOrLo)
+        if showLabels
+            lbOrHi := label.new(bar_index, orH, "", style=label.style_label_left,
+                 color=color.new(color.black, 100), textcolor=colOrHi, size=size.small)
+            lbOrLo := label.new(bar_index, orL, "", style=label.style_label_left,
+                 color=color.new(color.black, 100), textcolor=colOrLo, size=size.small)
+            orLbs.push(lbOrHi), orLbs.push(lbOrLo)
+
+if showOr and orExtend and not na(lnOrHi) and inDisp
+    line.set_x2(lnOrHi, bar_index)
+    line.set_x2(lnOrLo, bar_index)
+    if showLabels and not na(lbOrHi)
+        label.set_xy(lbOrHi, bar_index, orH)
+        label.set_xy(lbOrLo, bar_index, orL)
+        label.set_text(lbOrHi, "ORB Hoch  " + str.tostring(orH, format.mintick))
+        label.set_text(lbOrLo, "ORB Tief  " + str.tostring(orL, format.mintick))
+
+// ─── Alerts ─────────────────────────────────────────────────────────────────
+orbBreakUp = orFinal and ta.crossover(close, orH)
+orbBreakDn = orFinal and ta.crossunder(close, orL)
+ibBreakUp  = ibFinal and ta.crossover(close, ibH)
+ibBreakDn  = ibFinal and ta.crossunder(close, ibL)
+
+alertcondition(orbBreakUp, "ORB Breakout Long", "Kurs kreuzt über das ORB-Hoch")
+alertcondition(orbBreakDn, "ORB Breakout Short", "Kurs kreuzt unter das ORB-Tief")
+alertcondition(ibBreakUp, "IB Hoch gebrochen", "Kurs kreuzt über das IB-Hoch")
+alertcondition(ibBreakDn, "IB Tief gebrochen", "Kurs kreuzt unter das IB-Tief")
+
+// Hintergrund der Sessions dezent markieren
+bgcolor(inOr ? color.new(color.yellow, 96) : inIb ? color.new(color.blue, 96) : na,
+     title="Session-Hintergrund")

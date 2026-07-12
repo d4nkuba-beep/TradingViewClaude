@@ -1,3 +1,30 @@
+# TradingView Scripts: IB-Zonen, NY Opening Range & IB/ORB-Strategie (Pine v6)
+
+## Indikator: NASDAQ IB-Zonen + NY Opening Range
+
+**Datei:** `IB_ORB_Zones_Indicator.pine`
+**Empfohlener Chart:** NQ/MNQ (oder QQQ), 1–5-Minuten-Timeframe.
+
+Reines Visualisierungs-Tool (Overlay-Indikator) als Grundlage für die
+Entwicklung der NASDAQ-Strategie – zeigt pro Handelstag:
+
+1. **Initial Balance (IB)** als horizontale Level: **IB Hoch, IB75,
+   IB50, IB25, IB Tief** (Quartile der IB-Range).
+   - IB-Session frei einstellbar (Standard 09:30–10:30 New York).
+   - Wahlweise live während der Bildung oder erst nach IB-Abschluss.
+   - Quartils-Zonen optional eingefärbt (oberes Viertel grün, unteres
+     rot, Mitte neutral), Farben anpassbar.
+2. **NY Opening Range (ORB)** grafisch als Box (Standard: erste
+   15 Minuten, 09:30–09:45, frei einstellbar). ORB Hoch/Tief laufen
+   nach Range-Ende optional als Linien weiter.
+
+Weitere Einstellungen: Anzeigefenster (bis wann die Level nach rechts
+laufen, Standard 16:00 NY), Anzahl der dargestellten Tage (1–20),
+Beschriftungen mit Preisangabe an/aus. Enthaltene **Alerts**: Bruch von
+ORB Hoch/Tief sowie IB Hoch/Tief nach Abschluss der jeweiligen Range.
+
+---
+
 # IB 25% Retracement + ORB Breakout Strategie (TradingView / Pine v6)
 
 Strategie-Script für den TradingView Strategy Tester, basierend auf dem
