@@ -1,0 +1,328 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  ORB Spike-Reversal + RSI (NQ / ES)
+//
+//  Setup (aus dem Bild "fast spike"):
+//    - Opening Range (ORB) 09:30–10:00 New York markieren (Box + Mittellinie)
+//    - Nach der ORB: ein schneller Spike ("fast spike") AUSSERHALB der Range –
+//      unter das ORB-Tief bzw. über das ORB-Hoch, mit Mindestdistanz in ATR
+//      und Ausbruch innerhalb weniger Bars (Geschwindigkeit)
+//    - RSI-Filter: Spike nach unten nur bei überverkauftem RSI → Long-Reversal,
+//      Spike nach oben nur bei überkauftem RSI → Short-Reversal
+//    - Entry: Break of Structure (BOS) – Stop-Order über dem ersten Pivot-Hoch
+//      nach dem Spike-Tief (Short spiegelbildlich unter dem Pivot-Tief)
+//    - Stop-Loss: am Spike-Extrem ("stoploss placement: at the extreme")
+//    - Take-Profit: am Ursprung des Spikes ("target: origin of the spike"),
+//      alternativ ORB-Mitte, Gegenseite der ORB oder R-Multiple
+//
+//  Darstellung: ORB-Box, Spike-Markierung (gelb), BOS-Linie und Trade-Boxen
+//  (grün = Entry→TP, rot = Entry→SL). Alle Positionen werden zum
+//  Handelsschluss glattgestellt.
+// ════════════════════════════════════════════════════════════════════════════
+strategy("ORB Spike-Reversal + RSI (NQ/ES)", shorttitle="ORB-REV",
+     overlay=true, initial_capital=25000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
+     calc_on_every_tick=false, pyramiding=0,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
+
+// ─── Sessions (Börsenzeit New York) ─────────────────────────────────────────
+grpS    = "Sessions (New York Zeit)"
+tz      = input.string("America/New_York", "Zeitzone", group=grpS)
+orbSess = input.session("0930-1000", "Opening Range (ORB)", group=grpS)
+trdSess = input.session("1000-1500", "Setup-/Entry-Fenster (nach der ORB)", group=grpS)
+eodSess = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+// ─── RSI-Reversal-Filter ────────────────────────────────────────────────────
+grpF   = "RSI-Reversal-Filter"
+rsiLen = input.int(14, "RSI-Länge", minval=2, group=grpF)
+rsiOS  = input.float(30.0, "Überverkauft: Long-Reversal bei RSI ≤", minval=1, maxval=50, group=grpF)
+rsiOB  = input.float(70.0, "Überkauft: Short-Reversal bei RSI ≥", minval=50, maxval=99, group=grpF)
+
+// ─── Fast Spike ─────────────────────────────────────────────────────────────
+grpK      = "Fast Spike (außerhalb der ORB)"
+atrLen    = input.int(14, "ATR-Länge", minval=1, group=grpK)
+spikeAtr  = input.float(0.5, "Min. Distanz außerhalb der ORB (x ATR)", minval=0.0, step=0.25, group=grpK)
+speedBars = input.int(5, "Geschwindigkeit: Ausbruch innerhalb von X Bars", minval=1, group=grpK)
+
+// ─── Break of Structure (Entry) ─────────────────────────────────────────────
+grpB         = "Break of Structure (Entry)"
+strLeft      = input.int(3, "Pivot-Länge links", minval=1, group=grpB)
+strRight     = input.int(2, "Pivot-Länge rechts", minval=1, group=grpB)
+bosOffTicks  = input.int(2, "Entry-Offset hinter der Struktur (Ticks)", minval=0, group=grpB)
+maxSetupBars = input.int(40, "Setup verfällt nach X Bars ohne Entry", minval=5, group=grpB)
+
+// ─── Trade-Management ───────────────────────────────────────────────────────
+grpT       = "Trade-Management"
+tpMode     = input.string("Spike-Ursprung", "Take-Profit",
+     options=["Spike-Ursprung", "ORB-Mitte", "Gegenseite der ORB", "R-Multiple"], group=grpT)
+tpR        = input.float(1.5, "R-Multiple, falls 'R-Multiple' gewählt", minval=0.25, step=0.25, group=grpT)
+slOffTicks = input.int(2, "Stop-Offset hinter dem Spike-Extrem (Ticks)", minval=0, group=grpT)
+minRR      = input.float(0.5, "Min. CRV Reward/Risk (0 = kein Filter)", minval=0.0, step=0.25, group=grpT)
+maxTrades  = input.int(2, "Max. Trades pro Tag", minval=1, group=grpT)
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+grpD      = "Darstellung"
+showOrb   = input.bool(true, "ORB-Box anzeigen", group=grpD)
+showSpike = input.bool(true, "Spike-Markierung anzeigen", group=grpD)
+showBoxes = input.bool(true, "Trade-Boxen (Entry→TP / Entry→SL) anzeigen", group=grpD)
+
+// ─── Session-Flags & Indikatoren ────────────────────────────────────────────
+inOrb = not na(time(timeframe.period, orbSess, tz))
+inTrd = not na(time(timeframe.period, trdSess, tz))
+inEod = not na(time(timeframe.period, eodSess, tz))
+
+rsiV = ta.rsi(close, rsiLen)
+atrV = ta.atr(atrLen)
+hiN  = ta.highest(high, speedBars)
+loN  = ta.lowest(low, speedBars)
+ph   = ta.pivothigh(strLeft, strRight)
+pl   = ta.pivotlow(strLeft, strRight)
+
+bosOff = bosOffTicks * syminfo.mintick
+slOff  = slOffTicks * syminfo.mintick
+
+// ─── Tages-Status ───────────────────────────────────────────────────────────
+var float orbHigh     = na
+var float orbLow      = na
+var bool  orbDone     = false
+var int   orbStartBar = na
+var int   dayTrades   = 0
+
+// Setup-Status (0 = kein Setup, 1 = Long-Reversal, -1 = Short-Reversal)
+var int   setupDir    = 0
+var float spikeExt    = na   // Spike-Extrem → Stop-Loss
+var int   spikeExtBar = na
+var float spikeOrigin = na   // Ursprung des Spikes → Target
+var float bosLvl      = na   // Struktur-Level → Entry
+var int   setupBar    = na
+
+// Offene Position
+var float pendSl = na
+var float pendTp = na
+
+// Zeichnungen
+var box  orbBox   = na
+var line orbMidLn = na
+var line bosLine  = na
+var line tgtLine  = na
+var line extLine  = na
+var box  tpBox    = na
+var box  slBox    = na
+
+// ─── Opening Range aufbauen ─────────────────────────────────────────────────
+orbStart = inOrb and not inOrb[1]
+if orbStart
+    orbHigh     := high
+    orbLow      := low
+    orbDone     := false
+    orbStartBar := bar_index
+    dayTrades   := 0
+    setupDir    := 0
+    spikeExt    := na
+    spikeOrigin := na
+    bosLvl      := na
+    pendSl      := na
+    pendTp      := na
+    orbBox      := na
+    orbMidLn    := na
+    bosLine     := na
+    tgtLine     := na
+    extLine     := na
+    tpBox       := na
+    slBox       := na
+else if inOrb
+    orbHigh := math.max(orbHigh, high)
+    orbLow  := math.min(orbLow, low)
+
+orbMidPx = (orbHigh + orbLow) / 2
+
+if not inOrb and inOrb[1] and not na(orbHigh)
+    orbDone := true
+    if showOrb
+        orbBox := box.new(orbStartBar, orbHigh, bar_index, orbLow,
+             border_color=color.new(color.aqua, 20), bgcolor=color.new(color.aqua, 92))
+        box.set_text(orbBox, "ORB")
+        box.set_text_color(orbBox, color.new(color.aqua, 20))
+        box.set_text_size(orbBox, size.small)
+        box.set_text_halign(orbBox, text.align_left)
+        orbMidLn := line.new(orbStartBar, orbMidPx, bar_index, orbMidPx,
+             color=color.new(color.gray, 30), style=line.style_dashed)
+
+// ORB-Box bis zum Handelsschluss nachziehen
+if orbDone and not inEod
+    if not na(orbBox)
+        box.set_right(orbBox, bar_index)
+    if not na(orbMidLn)
+        line.set_x2(orbMidLn, bar_index)
+
+// ─── Order-Fills: Exits setzen, Trades zählen, Trade-Boxen zeichnen ─────────
+justEntered = strategy.position_size != 0 and strategy.position_size[1] == 0
+justExited  = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if justEntered
+    dayTrades += 1
+    avg    = strategy.position_avg_price
+    isLong = strategy.position_size > 0
+    finalTp = tpMode == "R-Multiple" ?
+         (isLong ? avg + tpR * (avg - pendSl) : avg - tpR * (pendSl - avg)) : pendTp
+    pendTp := finalTp
+    strategy.exit("X Rev", isLong ? "Rev Long" : "Rev Short", stop=pendSl, limit=finalTp)
+    label.new(bar_index, avg, "Entry: Break of Structure",
+         style=isLong ? label.style_label_up : label.style_label_down,
+         color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+    if showBoxes
+        tpBox := box.new(bar_index, math.max(avg, finalTp), bar_index, math.min(avg, finalTp),
+             border_color=color.new(color.green, 40), bgcolor=color.new(color.green, 85))
+        box.set_text(tpBox, "TP: " + tpMode)
+        box.set_text_color(tpBox, color.new(color.green, 20))
+        box.set_text_size(tpBox, size.small)
+        box.set_text_halign(tpBox, text.align_right)
+        slBox := box.new(bar_index, math.max(avg, pendSl), bar_index, math.min(avg, pendSl),
+             border_color=color.new(color.red, 40), bgcolor=color.new(color.red, 85))
+        box.set_text(slBox, "SL: Spike-Extrem")
+        box.set_text_color(slBox, color.new(color.red, 20))
+        box.set_text_size(slBox, size.small)
+        box.set_text_halign(slBox, text.align_right)
+    // Setup ist verbraucht
+    setupDir := 0
+    bosLvl   := na
+
+// Trade-Boxen mit der offenen Position mitziehen
+if strategy.position_size != 0
+    if not na(tpBox)
+        box.set_right(tpBox, bar_index)
+    if not na(slBox)
+        box.set_right(slBox, bar_index)
+
+if justExited
+    if not na(tpBox)
+        box.set_right(tpBox, bar_index)
+    if not na(slBox)
+        box.set_right(slBox, bar_index)
+    tpBox  := na
+    slBox  := na
+    pendSl := na
+    pendTp := na
+
+// ─── Setup-Abbruch (verpasst, Timeout, Fenster zu) ──────────────────────────
+missed  = (setupDir == 1 and close > spikeOrigin) or (setupDir == -1 and close < spikeOrigin)
+timeout = setupDir != 0 and bar_index - setupBar > maxSetupBars
+if setupDir != 0 and strategy.position_size == 0 and (missed or timeout or inEod or not inTrd)
+    setupDir := 0
+    bosLvl   := na
+    strategy.cancel("Rev Long")
+    strategy.cancel("Rev Short")
+
+// ─── Fast Spike außerhalb der ORB erkennen ──────────────────────────────────
+rng = orbHigh - orbLow
+canSetup = orbDone and inTrd and not inEod and strategy.position_size == 0
+     and setupDir == 0 and dayTrades < maxTrades and not na(rng) and rng > 0
+
+// Spike nach unten: schnell unter das ORB-Tief + RSI überverkauft → Long-Setup
+spikeDown = canSetup and low < orbLow - spikeAtr * atrV and hiN > orbLow and rsiV <= rsiOS
+// Spike nach oben: schnell über das ORB-Hoch + RSI überkauft → Short-Setup
+spikeUp   = canSetup and high > orbHigh + spikeAtr * atrV and loN < orbHigh and rsiV >= rsiOB
+
+if spikeDown or spikeUp
+    setupDir    := spikeDown ? 1 : -1
+    spikeExt    := spikeDown ? low : high
+    spikeExtBar := bar_index
+    spikeOrigin := spikeDown ? hiN : loN
+    setupBar    := bar_index
+    bosLvl      := na
+    bosLine     := na
+    if showSpike
+        box.new(math.max(bar_index - speedBars + 1, orbStartBar),
+             math.max(spikeOrigin, spikeExt), bar_index, math.min(spikeOrigin, spikeExt),
+             border_color=color.new(color.yellow, 30), bgcolor=color.new(color.yellow, 80))
+        label.new(bar_index, spikeDown ? low : high,
+             "Fast Spike · RSI " + str.tostring(rsiV, "#.0"),
+             style=spikeDown ? label.style_label_up : label.style_label_down,
+             color=color.new(color.yellow, 20), textcolor=color.black, size=size.small)
+    // Target (Spike-Ursprung) und Stop-Referenz (Spike-Extrem) einzeichnen
+    tgtLine := line.new(bar_index, spikeOrigin, bar_index, spikeOrigin,
+         color=color.new(color.blue, 30), width=1)
+    extLine := line.new(bar_index, spikeExt, bar_index, spikeExt,
+         color=color.new(color.red, 30), style=line.style_dotted)
+
+// ─── Setup pflegen: Extrem nachziehen, Struktur (BOS) suchen ────────────────
+if setupDir != 0 and strategy.position_size == 0
+    // Spike-Extrem nachziehen, falls der Spike noch weiterläuft
+    if setupDir == 1 and low < spikeExt
+        spikeExt    := low
+        spikeExtBar := bar_index
+    if setupDir == -1 and high > spikeExt
+        spikeExt    := high
+        spikeExtBar := bar_index
+    // Erste Struktur nach dem Spike-Extrem: Pivot-Hoch (Long) / Pivot-Tief (Short)
+    if setupDir == 1 and not na(ph) and bar_index - strRight > spikeExtBar and ph < spikeOrigin
+        bosLvl := ph
+        if not na(bosLine)
+            line.delete(bosLine)
+        bosLine := line.new(bar_index - strRight, bosLvl, bar_index, bosLvl,
+             color=color.new(color.gray, 20), style=line.style_dashed)
+        label.new(bar_index - strRight, bosLvl, "BOS", style=label.style_label_down,
+             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    if setupDir == -1 and not na(pl) and bar_index - strRight > spikeExtBar and pl > spikeOrigin
+        bosLvl := pl
+        if not na(bosLine)
+            line.delete(bosLine)
+        bosLine := line.new(bar_index - strRight, bosLvl, bar_index, bosLvl,
+             color=color.new(color.gray, 20), style=line.style_dashed)
+        label.new(bar_index - strRight, bosLvl, "BOS", style=label.style_label_up,
+             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    // Hilfslinien nachziehen
+    if not na(tgtLine)
+        line.set_x2(tgtLine, bar_index)
+    if not na(extLine)
+        line.set_x2(extLine, bar_index)
+        line.set_y1(extLine, spikeExt)
+        line.set_y2(extLine, spikeExt)
+    if not na(bosLine)
+        line.set_x2(bosLine, bar_index)
+
+// ─── Entry-Order am Break of Structure ──────────────────────────────────────
+if setupDir == 1 and strategy.position_size == 0 and not na(bosLvl)
+    entryPx = bosLvl + bosOff
+    slPx    = spikeExt - slOff
+    tpPx    = tpMode == "Spike-Ursprung" ? spikeOrigin :
+         tpMode == "ORB-Mitte" ? orbMidPx :
+         tpMode == "Gegenseite der ORB" ? orbHigh : na
+    risk   = entryPx - slPx
+    reward = tpMode == "R-Multiple" ? tpR * risk : tpPx - entryPx
+    if risk > 0 and reward > 0 and (minRR == 0 or reward >= minRR * risk)
+        strategy.entry("Rev Long", strategy.long, stop=entryPx)
+        pendSl := slPx
+        pendTp := tpPx
+    else
+        strategy.cancel("Rev Long")
+
+if setupDir == -1 and strategy.position_size == 0 and not na(bosLvl)
+    entryPx = bosLvl - bosOff
+    slPx    = spikeExt + slOff
+    tpPx    = tpMode == "Spike-Ursprung" ? spikeOrigin :
+         tpMode == "ORB-Mitte" ? orbMidPx :
+         tpMode == "Gegenseite der ORB" ? orbLow : na
+    risk   = slPx - entryPx
+    reward = tpMode == "R-Multiple" ? tpR * risk : entryPx - tpPx
+    if risk > 0 and reward > 0 and (minRR == 0 or reward >= minRR * risk)
+        strategy.entry("Rev Short", strategy.short, stop=entryPx)
+        pendSl := slPx
+        pendTp := tpPx
+    else
+        strategy.cancel("Rev Short")
+
+// ─── Glattstellen zum Handelsschluss ────────────────────────────────────────
+if inEod and not inEod[1]
+    strategy.cancel_all()
+if inEod
+    strategy.close_all(comment="EOD Flat")
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+bgcolor(inOrb ? color.new(color.blue, 94) : na, title="Opening Range")
+bgcolor(setupDir != 0 and strategy.position_size == 0 ? color.new(color.yellow, 96) : na,
+     title="Aktives Reversal-Setup")

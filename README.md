@@ -1,3 +1,65 @@
+# TradingView-Strategien (Pine v6)
+
+## Übersicht
+
+| Datei | Strategie |
+|---|---|
+| `IB_ORB_VWAP_Strategy.pine` | IB 25% Retracement + ORB Breakout (VWAP-Filter) |
+| `ORB_Spike_Reversal_RSI_Strategy.pine` | ORB Spike-Reversal + RSI (Fast-Spike-Setup) |
+
+---
+
+# ORB Spike-Reversal + RSI Strategie
+
+Reversal-Strategie für **NQ/MNQ (Nasdaq)** oder **ES/MES (S&P)** auf Basis
+des "Fast Spike"-Setups: Trades entstehen **außerhalb der Opening Range
+(ORB)**, wenn ein schneller Spike den Markt überdehnt und der **RSI** ein
+Extrem anzeigt.
+
+**Datei:** `ORB_Spike_Reversal_RSI_Strategy.pine`
+**Empfohlener Chart:** NQ/MNQ oder ES/MES, 1–5-Minuten-Timeframe.
+
+## Das Setup (aus dem Referenzbild)
+
+1. **ORB-Kennzeichnung:** Opening Range 09:30–10:00 New York wird als Box
+   mit Mittellinie markiert und über den Tag verlängert.
+2. **Fast Spike:** Nach der ORB spikt der Preis schnell **unter das
+   ORB-Tief** (bzw. über das ORB-Hoch) – Mindestdistanz in ATR, Ausbruch
+   innerhalb weniger Bars. Der Spike wird gelb markiert.
+3. **RSI-Filter:** Der Spike zählt nur, wenn der RSI extrem ist –
+   überverkauft (≤ 30) für ein Long-Reversal, überkauft (≥ 70) für ein
+   Short-Reversal. Bei extremem RSI ist ein Reversal wahrscheinlich.
+4. **Entry – Break of Structure (BOS):** Nach dem Spike-Extrem wird das
+   erste Pivot-Hoch (Long) bzw. Pivot-Tief (Short) als Struktur markiert.
+   Eine Stop-Order hinter dieser Struktur löst den Entry aus, sobald sie
+   gebrochen wird.
+5. **Stop-Loss:** am **Spike-Extrem** ("stoploss placement: at the
+   extreme"), mit einstellbarem Tick-Offset.
+6. **Take-Profit:** am **Ursprung des Spikes** ("target: origin of the
+   spike") – dem Level, von dem der schnelle Spike gestartet ist.
+   Alternativ wählbar: ORB-Mitte, Gegenseite der ORB oder R-Multiple.
+
+## Darstellung auf dem Chart
+
+- **ORB-Box** (aqua) mit Mittellinie, über den Tag verlängert.
+- **Spike-Markierung** (gelbe Box + Label mit RSI-Wert).
+- **BOS-Linie** (grau gestrichelt) mit "BOS"-Label am Pivot.
+- **Trade-Boxen** wie beim TradingView-Positionstool: grüne Box
+  Entry→TP, rote Box Entry→SL, die mit der offenen Position mitlaufen.
+- Ziel-Linie (blau, Spike-Ursprung) und Stop-Referenz (rot gepunktet,
+  Spike-Extrem) während des aktiven Setups.
+
+## Schutzmechanismen
+
+- Setup verfällt nach X Bars ohne Entry (Standard 40) oder wenn der
+  Preis das Target erreicht, bevor der BOS-Entry ausgelöst wurde.
+- Min. CRV-Filter (Standard 0.5): Trades mit zu schlechtem
+  Reward/Risk-Verhältnis werden nicht armiert.
+- Max. Trades pro Tag (Standard 2), Entry-Fenster 10:00–15:00 NY.
+- Alle Positionen werden 15:55–16:00 New York glattgestellt.
+
+---
+
 # IB 25% Retracement + ORB Breakout Strategie (TradingView / Pine v6)
 
 Strategie-Script für den TradingView Strategy Tester, basierend auf dem
