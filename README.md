@@ -49,6 +49,28 @@ Extrem anzeigt.
 - Ziel-Linie (blau, Spike-Ursprung) und Stop-Referenz (rot gepunktet,
   Spike-Extrem) während des aktiven Setups.
 
+## Lokaler M1-Backtest (Python)
+
+`backtest/orb_spike_reversal_backtest.py` ist ein 1:1-Port der
+Pine-Logik inkl. Order-Semantik des TradingView-Broker-Emulators
+(Stop-Entries füllen frühestens auf der Folge-Bar, SL/TP erst ab der Bar
+nach dem Fill aktiv, SL-vor-TP bei Berührung beider in einer Bar).
+
+```bash
+pip install pandas numpy
+
+# Logik-Validierung auf synthetischen NQ-1m-Daten (keine echte Performance!)
+python3 backtest/orb_spike_reversal_backtest.py --synth 60 --symbol NQ
+
+# Echter Backtest: 1m-Daten als CSV (z. B. TradingView-Chart-Export,
+# Spalten: time, open, high, low, close [, volume])
+python3 backtest/orb_spike_reversal_backtest.py --csv nq_1m.csv --symbol NQ
+```
+
+Parameter wie im Pine-Script einstellbar (`--tp-mode`, `--rsi-os`,
+`--rsi-ob`, `--spike-atr`, `--min-rr`, `--max-trades`); Trades lassen
+sich mit `--trades-csv pfad.csv` exportieren.
+
 ## Schutzmechanismen
 
 - Setup verfällt nach X Bars ohne Entry (Standard 40) oder wenn der
