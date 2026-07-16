@@ -46,6 +46,42 @@ Flash-Crash (−100 $ in <1 Min) wäre ein 10R-Gap durch den Stop =
 **−50 % Konto in einer Minute**. Die Simulation rechnet konservativ nur
 mit −3R-Gaps — die Realität kann schlechter sein.
 
+## Nachtrag: 10–15 % Risiko ("High Risk zum schnellen Skalieren")
+
+Gleiche Simulation plus numerische Kelly-Analyse (E[ln(1+f·R)], 400 000
+Züge), Kosten 0,10R:
+
+| Profil | Risiko | P(−50 %) | P(−70 %) | Median Endstand | Median Max-DD |
+|---|---:|---:|---:|---:|---:|
+| 45 %/2R (Ziel) | 10 % | 45.0 % | 25.3 % | 6.81x | 78.4 % |
+| 45 %/2R (Ziel) | **15 %** | **69.7 %** | **54.4 %** | **0.30x** | 87.9 % |
+| 40 %/2R (realistisch) | 10 % | 82.2 % | 69.0 % | 0.29x | 82.1 % |
+| 40 %/2R (realistisch) | 15 % | 94.5 % | 89.7 % | 0.28x | 84.8 % |
+
+Kelly-Optimum (maximales Log-Wachstum): **~10 %** beim Ziel-Profil,
+**~3 %** beim realistischen Profil. Daraus folgt:
+
+1. **15 % liegt jenseits von Voll-Kelly selbst für das Traumprofil** – das
+   Median-Ergebnis ist dann ein Verlustkonto (0.30x), obwohl einzelne
+   Pfade explodieren. Mehr Risiko = langsameres Wachstum ab ~10 %.
+2. **Ob Kelly 10 % oder 3 % ist, entscheiden 5 Prozentpunkte Trefferquote** –
+   und die kennen wir ohne Backtest/Live-Stichprobe schlicht nicht.
+   Overbetting gegenüber dem wahren Kelly ruiniert auch eine profitable
+   Strategie. Standard-Praxis ist deshalb maximal Halb-Kelly.
+3. **Mechanisch geht 15 % oft gar nicht:** bei 20-$-Stop auf Gold bräuchte
+   es ~31x Hebel (Cap: 25x). Und ein Flash-Gap von −3R bedeutet bei 15 %
+   Risiko −45 % Konto in einer Minute – zwei davon = tot.
+4. Wer "schnell skalieren" will: Der Unterschied zwischen 2 % und 10 %
+   Risiko ist beim Zielprofil 2.2x vs. 8.5x im Median über 250 Trades –
+   aber erkauft mit 45 % Halbierungsrisiko und 78 % Median-Drawdown, den
+   psychologisch niemand durchhandelt. Bei 300 $ Startkapital ist
+   **Nachschießen** (z. B. +100 $/Monat) der schnellere und sichere
+   Skalierungshebel, nicht die Risikoschraube.
+
+**Risiko-Fahrplan:** 2 % solange unbewiesen → nach bestandenem Backtest
+(≥ 45 %/2R über > 100 Trades) und 1 Monat live im Plus: 3–5 %
+(≈ Halb-Kelly) → niemals 10 %+.
+
 ## Empfehlung für das 300-$-Konto
 
 1. **Risiko 1–2 % pro Trade, nicht 5 %.** Bei 45 %/2R und 2 %:
