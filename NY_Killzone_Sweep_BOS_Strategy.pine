@@ -1,0 +1,274 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  NY Killzone: Liquidity Sweep + Break of Structure (Prop-Firm-Edition)
+//
+//  Idee (für NQ/MNQ, ES/MES oder Gold GC/MGC):
+//    1. Liquiditäts-Level = Previous Day High/Low und Overnight High/Low.
+//       Das sind die "Zonen", an denen Stops liegen (Supply/Demand-Logik).
+//    2. In der New-York-Killzone wird ein Level GESWEEPT: Der Preis stößt
+//       darüber/darunter, schließt aber wieder dahinter (Stop-Run / SFP).
+//    3. Entry erst nach Bestätigung: Break of Structure (BOS) – der Preis
+//       bricht per Schlusskurs das letzte Pivot-Tief (Short) bzw.
+//       Pivot-Hoch (Long) in Gegenrichtung des Sweeps.
+//    4. Stop hinter dem Sweep-Extrem, Take-Profit als R-Multiple (Std. 2R),
+//       optional Break-Even ab +1R.
+//    5. Optionaler Trend-Filter: nur Trades in Richtung des HTF-EMA
+//       (Sweep-Reversals zurück in den übergeordneten Trend).
+//
+//  Prop-Firm-Risikomodul:
+//    - Positionsgröße aus Risiko-% pro Trade (oder fixe Kontraktzahl)
+//    - Tages-Verlustlimit: Handel stoppt für den Rest des Tages
+//    - Max. Trailing-Drawdown: Strategie stoppt komplett
+//    - Max. Trades pro Tag, Glattstellen vor Handelsschluss
+//    - Status-Tabelle (Tages-P&L, Drawdown, Halt-Status) im Chart
+// ════════════════════════════════════════════════════════════════════════════
+strategy("NY Killzone: Sweep + BOS (Prop)", shorttitle="KZ Sweep+BOS",
+     overlay=true, initial_capital=50000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
+     calc_on_every_tick=false, pyramiding=0)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
+
+// ─── Sessions (New York Zeit) ───────────────────────────────────────────────
+grpS    = "Sessions (New York Zeit)"
+tz      = input.string("America/New_York", "Zeitzone", group=grpS)
+kzSess  = input.session("0930-1100", "NY Killzone (Entry-Fenster)", group=grpS,
+     tooltip="Für Indizes: 0930-1100. Für Gold auch 0830-1100 testen (08:30-News).")
+onSess  = input.session("1800-0930", "Overnight-Session (Liquiditäts-Range)", group=grpS)
+eodSess = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+// ─── Liquiditäts-Level ──────────────────────────────────────────────────────
+grpL     = "Liquiditäts-Level (Sweep-Ziele)"
+useLiqPD = input.bool(true, "Previous Day High/Low", group=grpL)
+useLiqON = input.bool(true, "Overnight High/Low", group=grpL)
+
+// ─── Setup: Sweep + Break of Structure ──────────────────────────────────────
+grpB       = "Setup: Sweep + BOS"
+pivLen     = input.int(3, "Pivot-Länge für Marktstruktur", minval=2, group=grpB,
+     tooltip="Kleinere Werte = schnellere BOS-Signale, mehr Rauschen.")
+armBars    = input.int(12, "Gültigkeit des Sweeps (Bars)", minval=1, group=grpB,
+     tooltip="Kommt innerhalb dieser Bars kein BOS, verfällt das Setup (12 Bars = 1h auf M5).")
+rrTarget   = input.float(2.0, "Take-Profit (R-Multiple)", minval=0.5, step=0.25, group=grpB)
+slOffTicks = input.int(4, "Stop-Offset hinter Sweep-Extrem (Ticks)", minval=0, group=grpB)
+useBE      = input.bool(true, "Stop auf Einstand ziehen", group=grpB)
+beTrigger  = input.float(1.0, "Break-Even-Trigger (R)", minval=0.25, step=0.25, group=grpB)
+
+// ─── Trend-Filter ───────────────────────────────────────────────────────────
+grpT     = "Trend-Filter"
+useTrend = input.bool(true, "Nur in Richtung des HTF-Trends handeln", group=grpT,
+     tooltip="Sweep-Reversal muss zurück in Richtung des übergeordneten Trends laufen.")
+trendTf  = input.timeframe("60", "Trend-Timeframe", group=grpT)
+trendLen = input.int(50, "EMA-Länge", minval=5, group=grpT)
+
+// ─── Prop-Firm-Risikomanagement ─────────────────────────────────────────────
+grpP         = "Prop-Firm-Risikomanagement"
+sizeMode     = input.string("Risiko-%", "Positionsgröße", options=["Risiko-%", "Fix"], group=grpP)
+riskPct      = input.float(0.5, "Risiko pro Trade (% des Kapitals)", minval=0.05, step=0.05, group=grpP,
+     tooltip="Kontrakte = Risiko-Budget / (Stop-Distanz × Punktwert). Auf Micros (MNQ/MES/MGC) handeln, damit die Größe fein genug skaliert.")
+fixQty       = input.int(1, "Kontrakte, falls 'Fix'", minval=1, group=grpP)
+maxTradesDay = input.int(2, "Max. Trades pro Tag", minval=1, group=grpP)
+dailyLossPct = input.float(2.0, "Tages-Verlustlimit (%) → Handel stoppt bis morgen", minval=0.25, step=0.25, group=grpP,
+     tooltip="Deutlich unter dem Limit der Prop-Firm wählen (z. B. 2 % bei 5 % FTMO-Tageslimit).")
+maxDdPct     = input.float(6.0, "Max. Trailing-Drawdown (%) → Strategie stoppt", minval=1, step=0.5, group=grpP)
+
+// ─── Session-Flags & Tageswechsel ───────────────────────────────────────────
+inKZ  = not na(time(timeframe.period, kzSess, tz))
+inON  = not na(time(timeframe.period, onSess, tz))
+inEod = not na(time(timeframe.period, eodSess, tz))
+
+newDay = dayofmonth(time, tz) != dayofmonth(time[1], tz)
+
+// ─── Liquiditäts-Level berechnen ────────────────────────────────────────────
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]],
+     lookahead=barmerge.lookahead_on)
+
+var float onHigh = na
+var float onLow  = na
+onStart = inON and not inON[1]
+if onStart
+    onHigh := high
+    onLow  := low
+else if inON
+    onHigh := math.max(onHigh, high)
+    onLow  := math.min(onLow, low)
+
+// ─── Trend-Filter (HTF-EMA) ─────────────────────────────────────────────────
+htfEma = request.security(syminfo.tickerid, trendTf, ta.ema(close, trendLen),
+     lookahead=barmerge.lookahead_off)
+longTrendOk  = not useTrend or close > htfEma
+shortTrendOk = not useTrend or close < htfEma
+
+// ─── Marktstruktur (Pivots) ─────────────────────────────────────────────────
+ph = ta.pivothigh(pivLen, pivLen)
+pl = ta.pivotlow(pivLen, pivLen)
+var float lastPivHigh = na
+var float lastPivLow  = na
+if not na(ph)
+    lastPivHigh := ph
+if not na(pl)
+    lastPivLow := pl
+
+// ─── Tages-Status & Risiko-Limits ───────────────────────────────────────────
+var float dayStartEq  = na
+var int   tradesToday = 0
+var bool  dayHalted   = false
+if newDay
+    dayStartEq  := strategy.equity
+    tradesToday := 0
+    dayHalted   := false
+
+var float peakEq = strategy.initial_capital
+peakEq := math.max(peakEq, strategy.equity)
+ddPct     = peakEq > 0 ? (peakEq - strategy.equity) / peakEq * 100 : 0.0
+ddHalt    = ddPct >= maxDdPct
+dayPnlPct = not na(dayStartEq) and dayStartEq > 0 ?
+     (strategy.equity - dayStartEq) / dayStartEq * 100 : 0.0
+if not dayHalted and dayPnlPct <= -dailyLossPct
+    dayHalted := true
+
+halted = dayHalted or ddHalt
+if halted
+    strategy.cancel_all()
+    strategy.close_all(comment="Risiko-Limit")
+
+// ─── Sweep-Erkennung (Stop-Run mit Rückschluss hinter das Level) ────────────
+sweepHiPD = useLiqPD and not na(pdh) and high > pdh and close < pdh
+sweepHiON = useLiqON and not na(onHigh) and not inON and high > onHigh and close < onHigh
+sweepLoPD = useLiqPD and not na(pdl) and low < pdl and close > pdl
+sweepLoON = useLiqON and not na(onLow) and not inON and low < onLow and close > onLow
+
+canTrade = inKZ and not halted and not inEod and tradesToday < maxTradesDay
+     and strategy.position_size == 0
+
+var bool  armedShort   = false
+var bool  armedLong    = false
+var int   armShortBar  = na
+var int   armLongBar   = na
+var float sweepHigh    = na
+var float sweepLow     = na
+
+newSweepHi = canTrade and (sweepHiPD or sweepHiON)
+newSweepLo = canTrade and (sweepLoPD or sweepLoON)
+
+if newSweepHi
+    armedShort  := true
+    armShortBar := bar_index
+    sweepHigh   := high
+if newSweepLo
+    armedLong  := true
+    armLongBar := bar_index
+    sweepLow   := low
+
+if armedShort
+    sweepHigh := math.max(sweepHigh, high)
+    if bar_index - armShortBar > armBars or not inKZ
+        armedShort := false
+if armedLong
+    sweepLow := math.min(sweepLow, low)
+    if bar_index - armLongBar > armBars or not inKZ
+        armedLong := false
+
+// ─── Break of Structure → Entry ─────────────────────────────────────────────
+tick     = syminfo.mintick
+bosShort = armedShort and not na(lastPivLow) and close < lastPivLow
+bosLong  = armedLong and not na(lastPivHigh) and close > lastPivHigh
+
+var float slPrice = na
+var float tpPrice = na
+var float riskPts = na
+
+calcQty(float riskDist) =>
+    sizeMode == "Fix" ? fixQty :
+         int(math.floor((strategy.equity * riskPct / 100) /
+         (riskDist * syminfo.pointvalue)))
+
+bool sigShort = false
+bool sigLong  = false
+
+if canTrade and bosShort and shortTrendOk
+    sl = sweepHigh + slOffTicks * tick
+    r  = sl - close
+    if r > 0
+        qty = calcQty(r)
+        if qty >= 1
+            strategy.entry("Short", strategy.short, qty=qty)
+            slPrice    := sl
+            riskPts    := r
+            tpPrice    := close - rrTarget * r
+            armedShort := false
+            tradesToday += 1
+            sigShort := true
+
+if canTrade and bosLong and longTrendOk
+    sl = sweepLow - slOffTicks * tick
+    r  = close - sl
+    if r > 0
+        qty = calcQty(r)
+        if qty >= 1
+            strategy.entry("Long", strategy.long, qty=qty)
+            slPrice   := sl
+            riskPts   := r
+            tpPrice   := close + rrTarget * r
+            armedLong := false
+            tradesToday += 1
+            sigLong := true
+
+// ─── Exits (Stop / Target / Break-Even) ─────────────────────────────────────
+avg = strategy.position_avg_price
+if strategy.position_size < 0
+    if useBE and low <= avg - beTrigger * riskPts
+        slPrice := math.min(slPrice, avg)
+    strategy.exit("X Short", "Short", stop=slPrice, limit=tpPrice)
+if strategy.position_size > 0
+    if useBE and high >= avg + beTrigger * riskPts
+        slPrice := math.max(slPrice, avg)
+    strategy.exit("X Long", "Long", stop=slPrice, limit=tpPrice)
+
+// ─── Glattstellen zum Handelsschluss ────────────────────────────────────────
+if inEod and not inEod[1]
+    strategy.cancel_all()
+if inEod
+    strategy.close_all(comment="EOD Flat")
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+plot(useLiqPD ? pdh : na, "Prev Day High", color=color.new(color.red, 35),
+     style=plot.style_linebr)
+plot(useLiqPD ? pdl : na, "Prev Day Low", color=color.new(color.green, 35),
+     style=plot.style_linebr)
+plot(useLiqON and not inON ? onHigh : na, "Overnight High",
+     color=color.new(color.orange, 35), style=plot.style_linebr)
+plot(useLiqON and not inON ? onLow : na, "Overnight Low",
+     color=color.new(color.teal, 35), style=plot.style_linebr)
+plot(useTrend ? htfEma : na, "HTF-EMA", color=color.new(color.purple, 40), linewidth=2)
+
+plotshape(newSweepHi, "Sweep Hoch", shape.triangledown, location.abovebar,
+     color.new(color.red, 0), size=size.tiny, text="Sweep")
+plotshape(newSweepLo, "Sweep Tief", shape.triangleup, location.belowbar,
+     color.new(color.green, 0), size=size.tiny, text="Sweep")
+plotshape(sigShort, "BOS Short", shape.labeldown, location.abovebar,
+     color.new(color.red, 0), text="BOS", textcolor=color.white, size=size.tiny)
+plotshape(sigLong, "BOS Long", shape.labelup, location.belowbar,
+     color.new(color.green, 0), text="BOS", textcolor=color.white, size=size.tiny)
+
+bgcolor(inKZ ? color.new(color.blue, 94) : na, title="NY Killzone")
+bgcolor(halted ? color.new(color.red, 90) : na, title="Handel gestoppt")
+
+// ─── Status-Tabelle (Prop-Tracking) ─────────────────────────────────────────
+var table statusTbl = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    statusText = ddHalt ? "GESTOPPT (Max-DD)" :
+         dayHalted ? "PAUSE (Tageslimit)" : "Aktiv"
+    statusBg = halted ? color.new(color.red, 70) : color.new(color.green, 70)
+    table.cell(statusTbl, 0, 0, "Status", text_size=size.small)
+    table.cell(statusTbl, 1, 0, statusText, text_size=size.small, bgcolor=statusBg)
+    table.cell(statusTbl, 0, 1, "Tages-P&L", text_size=size.small)
+    table.cell(statusTbl, 1, 1, str.tostring(dayPnlPct, "0.00") + " %", text_size=size.small,
+         bgcolor=dayPnlPct < 0 ? color.new(color.red, 80) : color.new(color.green, 80))
+    table.cell(statusTbl, 0, 2, "Trades heute", text_size=size.small)
+    table.cell(statusTbl, 1, 2, str.tostring(tradesToday) + " / " + str.tostring(maxTradesDay),
+         text_size=size.small)
+    table.cell(statusTbl, 0, 3, "Drawdown", text_size=size.small)
+    table.cell(statusTbl, 1, 3, str.tostring(ddPct, "0.00") + " % (max " +
+         str.tostring(maxDdPct, "0.0") + " %)", text_size=size.small)
