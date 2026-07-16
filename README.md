@@ -155,10 +155,26 @@ Ehrliche Risiken dieses Marktes gegenüber CME-Gold (GC/MGC):
   Risiko-%, nie nach Hebel.
 - **Kosten**: Taker-Fee ~0,045 % + 8h-Funding + Slippage → im Backtest
   konservativ `--cost-r 0.06` ansetzen.
-- **Prop-Kontext**: Prop-Firmen (FTMO/Topstep) lassen kein Hyperliquid zu —
-  die Challenge läuft auf CME-Gold (MGC). Hyperliquid ist der Live-Markt
-  fürs eigene Konto; die Setups sind dieselben, aber beide Varianten
-  getrennt backtesten (Oracle-Preis ≠ Futures-Preis).
+- **Konto-Kontext**: Prop-Firmen (FTMO/Topstep) lassen kein Hyperliquid zu —
+  eine Challenge liefe auf CME-Gold (MGC). Hyperliquid ist der Markt fürs
+  eigene Konto; beide Varianten getrennt backtesten (Oracle ≠ Futures).
+
+### Eigenkapital-Konto 300 $ statt Prop-Challenge
+
+Simulation in `backtest/results_equity_account.md`
+(`equity_account_sim.py`, 20 000 Pfade, inkl. Flash-Gap-Risiko). Ergebnis:
+
+- **5 % Risiko pro Trade ist nicht tragfähig:** Selbst mit dem besten
+  realistischen Profil (45 %/2R) Median-Drawdown 52 % und 11,6 %
+  Halbierungsrisiko; mit schwächeren Profilen 47–99 % Halbierungsrisiko.
+- **Gebühren-Falle bei Mini-Konten:** Kosten in R = 2 × Fee × Preis / Stop.
+  Enge 5m-Stops (5–10 $) kosten mit Taker-Fills 0,38–0,76R pro Trade —
+  strukturell unprofitabel, egal wie gut das Setup ist. Handelbar ab
+  ~20–40 $ Stops mit Limit-Entries (0,03–0,09R).
+- **Empfehlung:** 1–2 % Risiko, weite Stops (H1-Struktur), Maker-Entries,
+  Wochenenden flach. Bei 45 %/2R und 2 % Risiko: 69 % Verdopplungschance
+  bei 0,1 % Halbierungsrisiko über 250 Trades — das schlägt 5 % Risiko in
+  jeder Hinsicht außer der reinen Geschwindigkeit.
 
 ## Testprotokoll (so prüfen wir Profitabilität seriös)
 

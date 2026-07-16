@@ -21,6 +21,17 @@ python3 killzone_sweep_bos_backtest.py gold_5m.csv --preset ny-gold --tick 0.1 \
     --skip-weekends --cost-r 0.06
 ```
 
+**Zum Hyperliquid-MCP-Server (`edkdev/hyperliquid-mcp`):** geprüft am
+2026-07-16. Lokaler stdio-Server auf Basis des offiziellen Python-SDK mit
+Candle-/Orderbuch-Tools, aber auch Live-Trading-Tools; verlangt zwingend
+`HYPERLIQUID_PRIVATE_KEY`. Aus der Claude-Sandbox nutzlos, weil die Sperre
+auf Netzwerk-Ebene liegt (SDK-Test: `ProxyError 403` gegen
+`api.hyperliquid.xyz`). Für den reinen Datenabruf ist `hyperliquid_fetch.py`
+die bessere Wahl: **braucht keinen Private Key**. Falls der MCP-Server
+später lokal (Claude Desktop) fürs Trading eingesetzt wird: niemals den
+Haupt-Wallet-Key hinterlegen, sondern eine separate Hyperliquid
+API-Wallet mit begrenzten Rechten und kleinem Guthaben.
+
 Gold-Besonderheiten, die die Flags abdecken:
 - **`--skip-weekends`**: Der Perp handelt auch Sa/So, aber der
   Referenzmarkt (Spot/CME) ist zu — dünne Liquidität, Flash-Crash-Risiko
