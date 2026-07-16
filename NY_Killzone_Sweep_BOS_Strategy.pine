@@ -1,11 +1,18 @@
 //@version=6
 // ════════════════════════════════════════════════════════════════════════════
-//  NY Killzone: Liquidity Sweep + Break of Structure (Prop-Firm-Edition)
+//  Killzone: Liquidity Sweep + Break of Structure (Prop-Firm-Edition)
+//
+//  Handelbare Zeitfenster (Preset-Input, alle Zeiten New York):
+//    - London Killzone 02:00–05:00  (Liquiditäts-Range: Asia 18:00–02:00)
+//    - NY AM Killzone  09:30–11:00  (Liquiditäts-Range: Overnight 18:00–09:30)
+//    - NY PM Session   13:30–15:30  (Liquiditäts-Range: AM 09:30–13:30)
+//    - Custom (Sessions frei wählbar)
 //
 //  Idee (für NQ/MNQ, ES/MES oder Gold GC/MGC):
-//    1. Liquiditäts-Level = Previous Day High/Low und Overnight High/Low.
-//       Das sind die "Zonen", an denen Stops liegen (Supply/Demand-Logik).
-//    2. In der New-York-Killzone wird ein Level GESWEEPT: Der Preis stößt
+//    1. Liquiditäts-Level = Previous Day High/Low und High/Low der
+//       Liquiditäts-Range vor dem Zeitfenster. Das sind die "Zonen", an
+//       denen Stops liegen (Supply/Demand-Logik).
+//    2. Im Zeitfenster wird ein Level GESWEEPT: Der Preis stößt
 //       darüber/darunter, schließt aber wieder dahinter (Stop-Run / SFP).
 //    3. Entry erst nach Bestätigung: Break of Structure (BOS) – der Preis
 //       bricht per Schlusskurs das letzte Pivot-Tief (Short) bzw.
@@ -22,7 +29,7 @@
 //    - Max. Trades pro Tag, Glattstellen vor Handelsschluss
 //    - Status-Tabelle (Tages-P&L, Drawdown, Halt-Status) im Chart
 // ════════════════════════════════════════════════════════════════════════════
-strategy("NY Killzone: Sweep + BOS (Prop)", shorttitle="KZ Sweep+BOS",
+strategy("Killzone: Sweep + BOS (Prop)", shorttitle="KZ Sweep+BOS",
      overlay=true, initial_capital=50000,
      default_qty_type=strategy.fixed, default_qty_value=1,
      commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
@@ -32,17 +39,27 @@ if barstate.isfirst and not timeframe.isintraday
     runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 1–5 Minuten).")
 
 // ─── Sessions (New York Zeit) ───────────────────────────────────────────────
-grpS    = "Sessions (New York Zeit)"
-tz      = input.string("America/New_York", "Zeitzone", group=grpS)
-kzSess  = input.session("0930-1100", "NY Killzone (Entry-Fenster)", group=grpS,
-     tooltip="Für Indizes: 0930-1100. Für Gold auch 0830-1100 testen (08:30-News).")
-onSess  = input.session("1800-0930", "Overnight-Session (Liquiditäts-Range)", group=grpS)
-eodSess = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+grpS   = "Sessions (New York Zeit)"
+tz     = input.string("America/New_York", "Zeitzone", group=grpS)
+preset = input.string("London Killzone (02:00-05:00)", "Zeitfenster-Preset",
+     options=["London Killzone (02:00-05:00)", "NY AM Killzone (09:30-11:00)",
+     "NY PM Session (13:30-15:30)", "Custom"], group=grpS,
+     tooltip="London = außerhalb der NY-Killzone (sweept die Asia-Range). NY AM = klassische Killzone ab Cash-Open. Für Gold auch 08:30-11:00 als Custom testen (08:30-News).")
+kzCustom = input.session("0200-0500", "Killzone (nur Preset 'Custom')", group=grpS)
+rgCustom = input.session("1800-0200", "Liquiditäts-Range (nur Preset 'Custom')", group=grpS)
+eodSess  = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+kzSess = preset == "London Killzone (02:00-05:00)" ? "0200-0500" :
+     preset == "NY AM Killzone (09:30-11:00)" ? "0930-1100" :
+     preset == "NY PM Session (13:30-15:30)" ? "1330-1530" : kzCustom
+rgSess = preset == "London Killzone (02:00-05:00)" ? "1800-0200" :
+     preset == "NY AM Killzone (09:30-11:00)" ? "1800-0930" :
+     preset == "NY PM Session (13:30-15:30)" ? "0930-1330" : rgCustom
 
 // ─── Liquiditäts-Level ──────────────────────────────────────────────────────
 grpL     = "Liquiditäts-Level (Sweep-Ziele)"
 useLiqPD = input.bool(true, "Previous Day High/Low", group=grpL)
-useLiqON = input.bool(true, "Overnight High/Low", group=grpL)
+useLiqON = input.bool(true, "High/Low der Liquiditäts-Range (Asia/Overnight/AM)", group=grpL)
 
 // ─── Setup: Sweep + Break of Structure ──────────────────────────────────────
 grpB       = "Setup: Sweep + BOS"
@@ -75,7 +92,7 @@ maxDdPct     = input.float(6.0, "Max. Trailing-Drawdown (%) → Strategie stoppt
 
 // ─── Session-Flags & Tageswechsel ───────────────────────────────────────────
 inKZ  = not na(time(timeframe.period, kzSess, tz))
-inON  = not na(time(timeframe.period, onSess, tz))
+inRng = not na(time(timeframe.period, rgSess, tz))
 inEod = not na(time(timeframe.period, eodSess, tz))
 
 newDay = dayofmonth(time, tz) != dayofmonth(time[1], tz)
@@ -84,15 +101,15 @@ newDay = dayofmonth(time, tz) != dayofmonth(time[1], tz)
 [pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]],
      lookahead=barmerge.lookahead_on)
 
-var float onHigh = na
-var float onLow  = na
-onStart = inON and not inON[1]
-if onStart
-    onHigh := high
-    onLow  := low
-else if inON
-    onHigh := math.max(onHigh, high)
-    onLow  := math.min(onLow, low)
+var float rgHigh = na
+var float rgLow  = na
+rgStart = inRng and not inRng[1]
+if rgStart
+    rgHigh := high
+    rgLow  := low
+else if inRng
+    rgHigh := math.max(rgHigh, high)
+    rgLow  := math.min(rgLow, low)
 
 // ─── Trend-Filter (HTF-EMA) ─────────────────────────────────────────────────
 htfEma = request.security(syminfo.tickerid, trendTf, ta.ema(close, trendLen),
@@ -135,9 +152,9 @@ if halted
 
 // ─── Sweep-Erkennung (Stop-Run mit Rückschluss hinter das Level) ────────────
 sweepHiPD = useLiqPD and not na(pdh) and high > pdh and close < pdh
-sweepHiON = useLiqON and not na(onHigh) and not inON and high > onHigh and close < onHigh
+sweepHiON = useLiqON and not na(rgHigh) and not inRng and high > rgHigh and close < rgHigh
 sweepLoPD = useLiqPD and not na(pdl) and low < pdl and close > pdl
-sweepLoON = useLiqON and not na(onLow) and not inON and low < onLow and close > onLow
+sweepLoON = useLiqON and not na(rgLow) and not inRng and low < rgLow and close > rgLow
 
 canTrade = inKZ and not halted and not inEod and tradesToday < maxTradesDay
      and strategy.position_size == 0
@@ -237,9 +254,9 @@ plot(useLiqPD ? pdh : na, "Prev Day High", color=color.new(color.red, 35),
      style=plot.style_linebr)
 plot(useLiqPD ? pdl : na, "Prev Day Low", color=color.new(color.green, 35),
      style=plot.style_linebr)
-plot(useLiqON and not inON ? onHigh : na, "Overnight High",
+plot(useLiqON and not inRng ? rgHigh : na, "Range High",
      color=color.new(color.orange, 35), style=plot.style_linebr)
-plot(useLiqON and not inON ? onLow : na, "Overnight Low",
+plot(useLiqON and not inRng ? rgLow : na, "Range Low",
      color=color.new(color.teal, 35), style=plot.style_linebr)
 plot(useTrend ? htfEma : na, "HTF-EMA", color=color.new(color.purple, 40), linewidth=2)
 
@@ -252,7 +269,7 @@ plotshape(sigShort, "BOS Short", shape.labeldown, location.abovebar,
 plotshape(sigLong, "BOS Long", shape.labelup, location.belowbar,
      color.new(color.green, 0), text="BOS", textcolor=color.white, size=size.tiny)
 
-bgcolor(inKZ ? color.new(color.blue, 94) : na, title="NY Killzone")
+bgcolor(inKZ ? color.new(color.blue, 94) : na, title="Killzone")
 bgcolor(halted ? color.new(color.red, 90) : na, title="Handel gestoppt")
 
 // ─── Status-Tabelle (Prop-Tracking) ─────────────────────────────────────────

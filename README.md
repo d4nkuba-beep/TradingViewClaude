@@ -1,28 +1,45 @@
 # TradingView-Strategien (Pine v6) – NQ / ES / Gold
 
-Ziel des Repos: eine **profitable Intraday-Strategie rund um die New-York-
-Killzone** finden, die realistisch eine **Prop-Firm-Challenge** (FTMO, Topstep
-& Co.) bestehen kann. Alle Scripts laufen im TradingView Strategy Tester auf
-1–5-Minuten-Charts.
+Ziel des Repos: eine **profitable Intraday-Strategie** finden, die realistisch
+eine **Prop-Firm-Challenge** (FTMO, Topstep & Co.) besteht – handelbar in der
+London-Killzone (außerhalb der NY-Killzone), der NY-AM-Killzone oder der
+NY-PM-Session. Alle Scripts laufen im TradingView Strategy Tester auf
+1–5-Minuten-Charts; die Validierung läuft zusätzlich über die Python-Toolchain
+in `backtest/`.
 
-| Datei | Setup | Status |
+| Datei | Zweck | Status |
 |---|---|---|
-| `NY_Killzone_Sweep_BOS_Strategy.pine` | Liquidity Sweep + Break of Structure in der NY-Killzone, mit Prop-Risikomodul | **Hauptkandidat** – backtesten |
+| `NY_Killzone_Sweep_BOS_Strategy.pine` | Liquidity Sweep + Break of Structure (Session-Presets: London / NY AM / NY PM / Custom), mit Prop-Risikomodul | **Hauptkandidat** – backtesten |
+| `backtest/killzone_sweep_bos_backtest.py` | 1:1-Port der Strategie für TradingView-CSV-Exporte | einsatzbereit |
+| `backtest/prop_challenge_monte_carlo.py` | Monte-Carlo der Prop-Challenge (Pass-/Breach-Quote) | Ergebnisse in `backtest/results_monte_carlo.md` |
 | `IB_ORB_VWAP_Strategy.pine` | IB 25%-Retracement + ORB-Breakout (VWAP-Filter) | Baseline / Vergleich |
 
 ---
 
-## Strategie 1: NY Killzone – Liquidity Sweep + Break of Structure
+## Strategie 1: Killzone – Liquidity Sweep + Break of Structure
 
 **Datei:** `NY_Killzone_Sweep_BOS_Strategy.pine`
 **Empfohlene Charts:** MNQ / MES (Micros!) oder MGC, 1–5 Minuten.
 
+### Zeitfenster (Preset-Input, Zeiten in New York)
+
+| Preset | Entry-Fenster | Liquiditäts-Range davor |
+|---|---|---|
+| **London Killzone** (Standard) | 02:00–05:00 | Asia 18:00–02:00 |
+| NY AM Killzone | 09:30–11:00 | Overnight 18:00–09:30 |
+| NY PM Session | 13:30–15:30 | AM-Session 09:30–13:30 |
+| Custom | frei | frei |
+
+Damit lässt sich derselbe Setup-Kern **außerhalb der NY-Killzone** (London)
+und innerhalb (NY AM/PM) fahren und direkt vergleichen.
+
 ### Logik
 
 1. **Liquiditäts-Level** (die "Zonen"): Previous Day High/Low und
-   Overnight High/Low (18:00–09:30 NY). Dort liegen Stops – das sind die
-   natürlichen Sweep-Ziele, mechanisch definiert statt subjektiv gezeichnet.
-2. **Sweep in der Killzone (Std. 09:30–11:00 NY):** Preis stößt über/unter
+   High/Low der Liquiditäts-Range vor dem Fenster. Dort liegen Stops – das
+   sind die natürlichen Sweep-Ziele, mechanisch definiert statt subjektiv
+   gezeichnet.
+2. **Sweep im Entry-Fenster:** Preis stößt über/unter
    ein Level, schließt aber wieder dahinter (Stop-Run / Swing Failure).
 3. **Bestätigung per Break of Structure:** Erst wenn der Preis danach das
    letzte Pivot-Tief (Short) bzw. Pivot-Hoch (Long) per **Schlusskurs**
@@ -62,9 +79,11 @@ Stop-Order-Breakout über/unter der IB. Dient als Baseline zum Vergleich.
 
 **Was für den Ansatz spricht:**
 
-- Die NY-Killzone hat objektiv das höchste Volumen und die höchste
-  Volatilität des Tages – wenn es eine handelbare Intraday-Ineffizienz gibt,
-  dann dort. Enge Zeitfenster reduzieren außerdem Chop-Trades.
+- Enge, feste Zeitfenster mit klarem Liquiditätskontext (London-Open sweept
+  die Asia-Range, NY-Open die Overnight-Range) sind genau die Phasen, in
+  denen Stop-Runs systematisch auftreten – und sie reduzieren Chop-Trades.
+  Über die Presets lässt sich messen, ob der Edge außerhalb der NY-Killzone
+  (London) oder innerhalb stärker ist, statt das zu raten.
 - Sweep + BOS ist die **mechanisierbare** Version von "Supply/Demand +
   Break of Structure": Das Level ist objektiv (PDH/PDL, Overnight-Range),
   der Trigger ist objektiv (Schlusskurs bricht Pivot). Subjektiv gezeichnete
@@ -86,29 +105,43 @@ Stop-Order-Breakout über/unter der IB. Dient als Baseline zum Vergleich.
 - Gold verhält sich anders als NQ/ES (News-getrieben um 08:30, dünnere
   US-Session) – gleiche Regeln, aber separat testen, Killzone ggf. 08:30–11:00.
 
+## Monte-Carlo-Ergebnis: Die Messlatte ist beziffert
+
+20 000 simulierte FTMO-Challenges pro Szenario
+(`backtest/results_monte_carlo.md`, Details dort):
+
+- **2R-Ziel braucht ≥ 45 % Trefferquote** (entschiedene Trades) → 83 %
+  Pass-Quote bei 0,5 % Risiko, 94 % bei 1 %. Bei 40 %/2R nur Break-Even.
+- **3R-Ziel braucht nur ≥ 40 % Trefferquote** → 98 % Pass-Quote.
+- **Die Risiko-Defaults sind strukturell sicher:** Breach-Wahrscheinlichkeit
+  ≤ 2,4 % bei 0,5 % Risiko; das 5-%-Tageslimit ist mit max. 2 Trades ×
+  0,5 % Risiko mathematisch unerreichbar.
+- Negative Erwartung ist mit keinem Money-Management rettbar – der Edge
+  muss aus dem Setup kommen, das Risikomodul sichert ihn nur ab.
+
 ## Testprotokoll (so prüfen wir Profitabilität seriös)
 
-1. Script auf **MNQ 5m** laden, Standardeinstellungen, möglichst viel Historie
-   ("Deep Backtesting" falls verfügbar). Slippage im Tester auf 1–2 Ticks
-   stellen, Kommission prüfen.
-2. Kennzahlen notieren: Netto-Profit, **Profit-Faktor (> 1,3)**, max.
-   Drawdown (**< 6 %**), Trefferquote, Anzahl Trades (**> 100**),
-   größter Tagesverlust (**< 2 %**).
-3. Varianten einzeln vergleichen (immer nur 1 Änderung): Trend-Filter an/aus,
-   nur PDH/PDL vs. nur Overnight, 1,5R vs. 2R vs. 3R, Killzone 09:30–11:00
-   vs. 08:30–11:00.
+1. **Entweder** Script im TradingView Strategy Tester laden (MNQ 5m,
+   Slippage 1–2 Ticks) **oder** Chartdaten als CSV exportieren und
+   `backtest/killzone_sweep_bos_backtest.py` laufen lassen (siehe
+   `backtest/README.md`) – das erzeugt zusätzlich die R-Multiples für die
+   Monte-Carlo.
+2. Kennzahlen gegen die Messlatte halten: **Profit-Faktor > 1,3**,
+   Trefferquote **≥ 45 % bei 2R** (bzw. ≥ 40 % bei 3R), max. Drawdown
+   **< 6 %**, Anzahl Trades **> 100**, größter Tagesverlust **< 2 %**.
+3. Alle drei Session-Presets vergleichen (London / NY AM / NY PM), dann
+   Varianten einzeln (immer nur 1 Änderung): Trend-Filter an/aus, nur
+   PDH/PDL vs. nur Range, 1,5R vs. 2R vs. 3R.
 4. Das Gleiche auf **MES** und **MGC** wiederholen – ein echter Edge sollte
    auf mindestens zwei Märkten nicht komplett zusammenbrechen.
 5. Robustheits-Check: Parameter ±20 % verschieben. Kippt das Ergebnis von
-   profitabel auf unprofitabel → überoptimiert, verwerfen.
-6. Erst wenn 1–5 bestehen: 2–4 Wochen forward auf Demo/Paper laufen lassen,
-   dann Challenge mit halber Positionsgröße starten.
-
-**Prop-Challenge-Rechnung (Beispiel FTMO 50k):** Ziel 10 %, max. 5 %/Tag,
-10 % gesamt. Mit 0,5 % Risiko/Trade, 2R-Ziel und ~40 % Trefferquote braucht
-es im Erwartungswert ~50 Trades fürs Ziel (~5–8 Wochen bei 1–2 Trades/Tag) –
-bei einem Worst-Case-Pfad, der die Limits mit den Script-Defaults praktisch
-nicht reißen kann (Tagesstopp bei −2 %, Gesamtstopp bei −6 %).
+   profitabel auf unprofitabel → überoptimiert, verwerfen. Out-of-Sample:
+   letzte 30 % der Daten nur einmal am Ende testen.
+6. Echte Trade-Verteilung in die Monte-Carlo einspeisen
+   (`prop_challenge_monte_carlo.py --csv trades_out.csv`) → tatsächliche
+   Pass-Wahrscheinlichkeit. Erst bei > 80 %: 2–4 Wochen forward auf Demo,
+   dann Challenge mit 0,5 % Risiko starten (nach +3 % Puffer auf 1 % erhöhen
+   → mediane Challenge-Dauer sinkt von ~63 auf ~31 Handelstage).
 
 ## Hinweise
 
