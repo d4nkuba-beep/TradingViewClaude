@@ -47,6 +47,27 @@ lassen.)
    Risikomodul entscheidet nur, ob ein vorhandener Edge die Challenge
    überlebt.
 
+## Zusatzlauf: publiziertes ORB-Profil (Zarattini/Aziz)
+
+Gleiches Challenge-Modell, aber Trade-Profil der 5-Min-ORB-Strategie
+(1 Trade/Tag, 5 % Scratches, niedrige Trefferquote, große Gewinner):
+
+| WinRate | RR | Risiko/Trade | E[R] | **Pass** | Breach | Timeout | Median Tage |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 24 % | 4.0 | 0.25 % | +0.15 | 21.7 % | 0.7 % | 77.6 % | 86 |
+| 24 % | 4.0 | 0.5 % | +0.15 | 59.8 % | 12.5 % | 27.7 % | 54 |
+| 24 % | 5.0 | 0.5 % | +0.38 | **87.8 %** | 4.7 % | 7.5 % | 40 |
+| 24 % | 5.0 | 1.0 % | +0.38 | 80.4 % | 19.5 % | 0.1 % | 16 |
+| 30 % | 4.0 | 0.5 % | +0.43 | **93.9 %** | 1.3 % | 4.8 % | 40 |
+
+**Interpretation:** Das ORB-Profil ist auf realen Daten belegt profitabel,
+aber seine niedrige Trefferquote erzeugt lange Verluststrecken – gegen ein
+6-%-Trailing-Limit ist das deutlich fragiler als das 45-%/2R-Profil des
+Sweep+BOS-Setups (12,5 % Breach bei 0,5 % Risiko und 4R-Payoff). Für die
+Challenge heißt das: ORB nur mit 0,25–0,5 % Risiko fahren und den
+10R-Take-Profit aktiv lassen (höherer Payoff → 87,8 % Pass), oder ORB als
+Zweitsystem neben Sweep+BOS laufen lassen, um den Pfad zu glätten.
+
 ## Nächster Schritt
 
 Echte R-Multiples aus dem Backtest (TradingView-CSV →

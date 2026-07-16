@@ -1,0 +1,184 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  5-Minuten Opening Range Breakout (nach Zarattini & Aziz 2023)
+//
+//  Umsetzung der in "Can Day Trading Really Be Profitable?" (SSRN 4416622)
+//  auf realen QQQ-5-Minuten-Daten 2016–2023 getesteten Regeln – die einzige
+//  Strategie in diesem Repo mit VERÖFFENTLICHTER Real-Daten-Evidenz für
+//  Netto-Profitabilität (nach Kommissionen):
+//
+//    - Erste 5-Min-Kerze (09:30–09:35 NY) bullisch → Long zum Open der
+//      zweiten Kerze; bärisch → Short. Doji → kein Trade.
+//    - Stop-Loss: Tief (Long) bzw. Hoch (Short) der ersten 5-Min-Kerze.
+//    - Take-Profit: 10R (Paper-Basisvariante); alternativ 0 = nur
+//      End-of-Day-Exit. Alles Offene wird zum Handelsschluss glattgestellt.
+//    - Positionsgröße: 1 % Risiko des aktuellen Kapitals pro Trade,
+//      Leverage-Deckel 4x (Paper-Annahmen, $0.0005/Aktie Kommission).
+//
+//  Publizierte Ergebnisse (QQQ, 2016–2023, netto): Gesamtrendite ~675 %
+//  vs. ~169 % Buy&Hold, annualisiertes Alpha ~33 %, niedrige Trefferquote
+//  (~25 %) bei großen Gewinnern. Kein Garant für die Zukunft – aber ein
+//  auf 7 Jahren realer Daten dokumentierter Edge.
+//
+//  Zusätzlich (nicht im Paper): Prop-Firm-Schutzschalter wie im
+//  Killzone-Script (Tagesstopp, Max-Drawdown-Halt), Standard 0,5 % Risiko
+//  für Challenge-Konten statt der aggressiven 1 % des Papers.
+// ════════════════════════════════════════════════════════════════════════════
+strategy("ORB 5-Min (Zarattini/Aziz, Prop)", shorttitle="ORB-5m",
+     overlay=true, initial_capital=25000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.0005,
+     calc_on_every_tick=false, pyramiding=0)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (1 oder 5 Minuten).")
+
+// ─── Sessions ───────────────────────────────────────────────────────────────
+grpS    = "Sessions (New York Zeit)"
+tz      = input.string("America/New_York", "Zeitzone", group=grpS)
+orbSess = input.session("0930-0935", "Opening Range", group=grpS)
+orbMin  = input.int(5, "ORB-Dauer (Minuten)", minval=1, group=grpS,
+     tooltip="Muss zur Opening-Range-Session passen (Std. 5 Minuten).")
+eodSess = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+// ─── Setup ──────────────────────────────────────────────────────────────────
+grpB   = "Setup (Paper-Regeln)"
+dirMode = input.string("Long & Short", "Richtung",
+     options=["Long & Short", "Nur Long", "Nur Short"], group=grpB)
+ptR    = input.float(10.0, "Take-Profit (R-Multiple, 0 = nur EoD-Exit)",
+     minval=0, step=0.5, group=grpB)
+
+// ─── Risiko (Prop-Edition: konservativer als das Paper) ─────────────────────
+grpP         = "Risikomanagement"
+riskPct      = input.float(0.5, "Risiko pro Trade (% des Kapitals)", minval=0.05,
+     step=0.05, group=grpP, tooltip="Paper: 1 %. Für Prop-Challenges 0,25–0,5 %.")
+levCap       = input.float(4.0, "Max. Leverage (x Kapital, Paper: 4x)", minval=0.5,
+     step=0.5, group=grpP)
+dailyLossPct = input.float(2.0, "Tages-Verlustlimit (%) → Handel stoppt bis morgen",
+     minval=0.25, step=0.25, group=grpP)
+maxDdPct     = input.float(6.0, "Max. Trailing-Drawdown (%) → Strategie stoppt",
+     minval=1, step=0.5, group=grpP)
+
+// ─── Session-Flags ──────────────────────────────────────────────────────────
+inOrb = not na(time(timeframe.period, orbSess, tz))
+inEod = not na(time(timeframe.period, eodSess, tz))
+newDay = dayofmonth(time, tz) != dayofmonth(time[1], tz)
+
+// ─── Tages-Status & Risiko-Limits ───────────────────────────────────────────
+var float dayStartEq = na
+var bool  dayHalted  = false
+var bool  tradedToday = false
+if newDay
+    dayStartEq  := strategy.equity
+    dayHalted   := false
+    tradedToday := false
+
+var float peakEq = strategy.initial_capital
+peakEq := math.max(peakEq, strategy.equity)
+ddPct     = peakEq > 0 ? (peakEq - strategy.equity) / peakEq * 100 : 0.0
+ddHalt    = ddPct >= maxDdPct
+dayPnlPct = not na(dayStartEq) and dayStartEq > 0 ?
+     (strategy.equity - dayStartEq) / dayStartEq * 100 : 0.0
+if not dayHalted and dayPnlPct <= -dailyLossPct
+    dayHalted := true
+halted = dayHalted or ddHalt
+if halted
+    strategy.cancel_all()
+    strategy.close_all(comment="Risiko-Limit")
+
+// ─── Opening Range aufbauen ─────────────────────────────────────────────────
+var float orbOpen  = na
+var float orbClose = na
+var float orbHigh  = na
+var float orbLow   = na
+var int   orbStartT = na
+
+orbStart = inOrb and not inOrb[1]
+if orbStart
+    orbOpen   := open
+    orbHigh   := high
+    orbLow    := low
+    orbStartT := time
+if inOrb
+    orbHigh  := math.max(orbHigh, high)
+    orbLow   := math.min(orbLow, low)
+    orbClose := close
+
+// Letzte Bar des ORB-Fensters: Order hier platziert → Fill am Open der
+// nächsten Bar (= Open der zweiten 5-Min-Kerze, wie im Paper)
+isLastOrbBar = inOrb and not na(orbStartT) and
+     (time_close - orbStartT >= orbMin * 60000)
+
+// ─── Entry ──────────────────────────────────────────────────────────────────
+var float slPrice = na
+var float tpPrice = na
+bool sigLong  = false
+bool sigShort = false
+
+allowLong  = dirMode != "Nur Short"
+allowShort = dirMode != "Nur Long"
+
+calcQty(float riskDist) =>
+    riskQty = math.floor((strategy.equity * riskPct / 100) /
+         (riskDist * syminfo.pointvalue))
+    levQty  = math.floor(levCap * strategy.equity / (close * syminfo.pointvalue))
+    int(math.max(0, math.min(riskQty, levQty)))
+
+if isLastOrbBar and not halted and not tradedToday and strategy.position_size == 0
+    if orbClose > orbOpen and allowLong
+        r = close - orbLow
+        qty = r > 0 ? calcQty(r) : 0
+        if qty >= 1
+            strategy.entry("Long", strategy.long, qty=qty)
+            slPrice := orbLow
+            tpPrice := ptR > 0 ? close + ptR * r : na
+            tradedToday := true
+            sigLong := true
+    else if orbClose < orbOpen and allowShort
+        r = orbHigh - close
+        qty = r > 0 ? calcQty(r) : 0
+        if qty >= 1
+            strategy.entry("Short", strategy.short, qty=qty)
+            slPrice := orbHigh
+            tpPrice := ptR > 0 ? close - ptR * r : na
+            tradedToday := true
+            sigShort := true
+
+// ─── Exits ──────────────────────────────────────────────────────────────────
+if strategy.position_size > 0
+    strategy.exit("X Long", "Long", stop=slPrice, limit=tpPrice)
+if strategy.position_size < 0
+    strategy.exit("X Short", "Short", stop=slPrice, limit=tpPrice)
+
+if inEod and not inEod[1]
+    strategy.cancel_all()
+if inEod
+    strategy.close_all(comment="EOD Flat")
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+showOrb = not na(orbHigh) and not inOrb
+plot(showOrb ? orbHigh : na, "ORB Hoch", color=color.new(color.aqua, 30),
+     style=plot.style_linebr)
+plot(showOrb ? orbLow : na, "ORB Tief", color=color.new(color.aqua, 30),
+     style=plot.style_linebr)
+plotshape(sigLong, "ORB Long", shape.labelup, location.belowbar,
+     color.new(color.green, 0), text="ORB", textcolor=color.white, size=size.tiny)
+plotshape(sigShort, "ORB Short", shape.labeldown, location.abovebar,
+     color.new(color.red, 0), text="ORB", textcolor=color.white, size=size.tiny)
+bgcolor(inOrb ? color.new(color.blue, 90) : na, title="Opening Range")
+bgcolor(halted ? color.new(color.red, 90) : na, title="Handel gestoppt")
+
+// ─── Status-Tabelle ─────────────────────────────────────────────────────────
+var table statusTbl = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    statusText = ddHalt ? "GESTOPPT (Max-DD)" :
+         dayHalted ? "PAUSE (Tageslimit)" : "Aktiv"
+    statusBg = halted ? color.new(color.red, 70) : color.new(color.green, 70)
+    table.cell(statusTbl, 0, 0, "Status", text_size=size.small)
+    table.cell(statusTbl, 1, 0, statusText, text_size=size.small, bgcolor=statusBg)
+    table.cell(statusTbl, 0, 1, "Tages-P&L", text_size=size.small)
+    table.cell(statusTbl, 1, 1, str.tostring(dayPnlPct, "0.00") + " %",
+         text_size=size.small)
+    table.cell(statusTbl, 0, 2, "Drawdown", text_size=size.small)
+    table.cell(statusTbl, 1, 2, str.tostring(ddPct, "0.00") + " % (max " +
+         str.tostring(maxDdPct, "0.0") + " %)", text_size=size.small)

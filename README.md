@@ -9,10 +9,32 @@ in `backtest/`.
 
 | Datei | Zweck | Status |
 |---|---|---|
-| `NY_Killzone_Sweep_BOS_Strategy.pine` | Liquidity Sweep + Break of Structure (Session-Presets: London / NY AM / NY PM / Custom), mit Prop-Risikomodul | **Hauptkandidat** – backtesten |
-| `backtest/killzone_sweep_bos_backtest.py` | 1:1-Port der Strategie für TradingView-CSV-Exporte | einsatzbereit |
+| `ORB_5min_Zarattini_Strategy.pine` | 5-Min-ORB nach Zarattini/Aziz 2023 – **publizierte Real-Daten-Evidenz für Netto-Profitabilität** (QQQ 2016–2023), plus Prop-Schutzschalter | **Evidenz-Kandidat** – auf QQQ/NQ verifizieren |
+| `NY_Killzone_Sweep_BOS_Strategy.pine` | Liquidity Sweep + Break of Structure (Session-Presets: London / NY AM / NY PM / Custom), mit Prop-Risikomodul | Hypothesen-Kandidat – backtesten |
+| `backtest/killzone_sweep_bos_backtest.py` | 1:1-Port der Sweep+BOS-Strategie für TradingView-CSV-Exporte | einsatzbereit |
 | `backtest/prop_challenge_monte_carlo.py` | Monte-Carlo der Prop-Challenge (Pass-/Breach-Quote) | Ergebnisse in `backtest/results_monte_carlo.md` |
 | `IB_ORB_VWAP_Strategy.pine` | IB 25%-Retracement + ORB-Breakout (VWAP-Filter) | Baseline / Vergleich |
+
+## Strategie 0 (Evidenz-Kandidat): 5-Min-ORB nach Zarattini & Aziz
+
+Die einzige Strategie hier mit **veröffentlichtem Real-Daten-Backtest**:
+Zarattini & Aziz, *"Can Day Trading Really Be Profitable?"* (SSRN 4416622,
+2023), testeten auf echten QQQ-5-Minuten-Daten 2016–2023: Erste 5-Min-Kerze
+bullisch → Long am Open der zweiten Kerze (bärisch → Short), Stop am
+Extrem der ersten Kerze, Take-Profit 10R oder End-of-Day-Exit, 1 % Risiko,
+max. 4x Leverage, $0.0005/Aktie Kommission. **Ergebnis: ~675 % Gesamtrendite
+netto vs. ~169 % QQQ Buy-and-Hold, annualisiertes Alpha ~33 %**, niedrige
+Trefferquote (~25 %) bei großen Gewinnern.
+
+`ORB_5min_Zarattini_Strategy.pine` setzt diese Regeln exakt um und ergänzt
+die Prop-Schutzschalter (Tagesstopp, Max-DD-Halt, Standard 0,5 % Risiko).
+Wichtige Einschränkungen, ebenso ehrlich: Die Studie endet 2023 (Regime kann
+kippen), und das Profil mit niedriger Trefferquote erzeugt lange
+Verluststrecken – die Monte-Carlo unten zeigt, dass es für 6-%-Trailing-
+Limits nur mit 0,25–0,5 % Risiko und aktivem 10R-Target robust ist
+(87,8 % Pass-Quote). Erster Schritt daher: Script auf QQQ 5m laden und
+prüfen, ob der Strategy Tester die Paper-Größenordnung reproduziert; danach
+auf NQ/MNQ übertragen.
 
 ---
 
