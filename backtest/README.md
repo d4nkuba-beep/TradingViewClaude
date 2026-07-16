@@ -1,10 +1,38 @@
 # Backtest- & Validierungs-Toolchain
 
-Da Marktdaten-APIs aus dieser Umgebung nicht erreichbar sind, läuft die
-Validierung zweistufig: Kursdaten kommen per CSV-Export aus TradingView,
-alles Weitere rechnet lokal.
+Da Marktdaten-APIs aus dieser Umgebung nicht erreichbar sind (geprüft:
+Yahoo, Stooq, auch api.hyperliquid.xyz – alle per Netzwerk-Policy
+gesperrt), läuft die Validierung zweistufig: Kursdaten kommen per CSV
+(TradingView-Export **oder** Hyperliquid-Fetcher, lokal ausgeführt),
+alles Weitere rechnet hier.
 
-## 1. Daten aus TradingView exportieren
+## 1a. Gold-Daten von Hyperliquid (`hyperliquid_fetch.py`)
+
+Gold handelt auf Hyperliquid als HIP-3-Perpetual **`xyz:GOLD`** (trackt den
+Spot-Goldpreis per Oracle, 24/7, bis 25x Hebel). Der Fetcher braucht nur
+die Python-Standardbibliothek und keinen API-Key — **auf dem eigenen
+Rechner ausführen** (aus der Claude-Sandbox ist die API gesperrt), die CSV
+dann ins Repo committen:
+
+```bash
+python3 hyperliquid_fetch.py --list --dex xyz              # Märkte prüfen
+python3 hyperliquid_fetch.py --coin xyz:GOLD --interval 5m --days 120 --out gold_5m.csv
+python3 killzone_sweep_bos_backtest.py gold_5m.csv --preset ny-gold --tick 0.1 \
+    --skip-weekends --cost-r 0.06
+```
+
+Gold-Besonderheiten, die die Flags abdecken:
+- **`--skip-weekends`**: Der Perp handelt auch Sa/So, aber der
+  Referenzmarkt (Spot/CME) ist zu — dünne Liquidität, Flash-Crash-Risiko
+  (im Oktober 2025 fiel der HL-Gold-Perp in <1 Minute um $100). Kein Handel
+  am Wochenende.
+- **`--cost-r 0.06`**: Hyperliquid-Taker-Fee (~0,045 %) + Funding (8h) +
+  Slippage wiegen bei engen Intraday-Stops schwerer als 1,25 $ Futures-
+  Kommission.
+- **`--preset ny-gold`** (08:30–11:00 NY, Range 18:00–08:30): Gold reagiert
+  auf die 08:30-US-News; alternativ `--preset london` testen.
+
+## 1b. Daten aus TradingView exportieren
 
 1. Chart öffnen: **MNQ1!** (oder MES1!/MGC1!), Timeframe **5 Minuten**.
 2. Möglichst weit zurückscrollen (lädt Historie nach).

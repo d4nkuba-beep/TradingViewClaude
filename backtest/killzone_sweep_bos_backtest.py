@@ -35,9 +35,11 @@ NY = ZoneInfo("America/New_York")
 
 PRESETS = {
     # (killzone_start, killzone_end, range_start, range_end) in NY-Zeit
-    "london": (dtime(2, 0), dtime(5, 0), dtime(18, 0), dtime(2, 0)),
-    "ny-am":  (dtime(9, 30), dtime(11, 0), dtime(18, 0), dtime(9, 30)),
-    "ny-pm":  (dtime(13, 30), dtime(15, 30), dtime(9, 30), dtime(13, 30)),
+    "london":  (dtime(2, 0), dtime(5, 0), dtime(18, 0), dtime(2, 0)),
+    "ny-am":   (dtime(9, 30), dtime(11, 0), dtime(18, 0), dtime(9, 30)),
+    "ny-pm":   (dtime(13, 30), dtime(15, 30), dtime(9, 30), dtime(13, 30)),
+    # Gold: NY-Killzone ab 08:30 (US-News), Range = Asia+London davor
+    "ny-gold": (dtime(8, 30), dtime(11, 0), dtime(18, 0), dtime(8, 30)),
 }
 
 
@@ -88,6 +90,7 @@ class Params:
     max_dd_pct: float = 6.0
     cost_r: float = 0.04
     eod: dtime = dtime(15, 55)
+    skip_weekends: bool = False  # 24/7-Maerkte (Hyperliquid): Sa/So aussetzen
 
 
 def load_bars(path: str) -> list[Bar]:
@@ -173,6 +176,14 @@ def backtest(bars: list[Bar], p: Params) -> tuple[list[Trade], dict]:
         d = b.ts.date()
         if d != cur_day:
             cur_day, trades_today, day_pnl_pct = d, 0, 0.0
+
+        if p.skip_weekends:
+            wd = b.ts.weekday()
+            if wd == 5 or (wd == 6 and t < dtime(18, 0)):
+                if open_trade is not None:
+                    close_trade(open_trade, b, b.c, "weekend")
+                    open_trade = None
+                continue
 
         in_kz = in_session(t, kz_s, kz_e)
         in_rg = in_session(t, rg_s, rg_e)
@@ -304,15 +315,21 @@ def main() -> None:
     ap.add_argument("--rr", type=float, default=2.0)
     ap.add_argument("--piv-len", type=int, default=3)
     ap.add_argument("--arm-bars", type=int, default=12)
-    ap.add_argument("--tick", type=float, default=0.25)
+    ap.add_argument("--tick", type=float, default=0.25,
+                    help="Mindest-Tick (NQ/ES: 0.25, Gold xyz:GOLD: 0.1)")
     ap.add_argument("--risk-pct", type=float, default=0.5)
+    ap.add_argument("--cost-r", type=float, default=0.04,
+                    help="Kosten pro Trade in R (Hyperliquid Taker+Funding: eher 0.05-0.08)")
+    ap.add_argument("--skip-weekends", action="store_true",
+                    help="Sa/So nicht handeln (24/7-Maerkte wie Hyperliquid-Gold)")
     ap.add_argument("--no-trend", action="store_true")
     ap.add_argument("--no-be", action="store_true")
     ap.add_argument("--out", default="trades_out.csv")
     a = ap.parse_args()
 
     p = Params(preset=a.preset, rr=a.rr, piv_len=a.piv_len, arm_bars=a.arm_bars,
-               tick=a.tick, risk_pct=a.risk_pct,
+               tick=a.tick, risk_pct=a.risk_pct, cost_r=a.cost_r,
+               skip_weekends=a.skip_weekends,
                use_trend=not a.no_trend, use_be=not a.no_be)
     bars = load_bars(a.csv)
     if not bars:

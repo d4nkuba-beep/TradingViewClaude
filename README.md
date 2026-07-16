@@ -141,6 +141,25 @@ Stop-Order-Breakout über/unter der IB. Dient als Baseline zum Vergleich.
 - Negative Erwartung ist mit keinem Money-Management rettbar – der Edge
   muss aus dem Setup kommen, das Risikomodul sichert ihn nur ab.
 
+## Fokus-Markt: Gold auf Hyperliquid (`xyz:GOLD`)
+
+Gold ist auf Hyperliquid als HIP-3-Perpetual **`xyz:GOLD`** verfügbar
+(Oracle-getrackter Spot-Goldpreis, 24/7, bis 25x Hebel, ~267 Mio. $
+Tagesvolumen). Für den Backtest liefert `backtest/hyperliquid_fetch.py`
+die 5-Minuten-Kerzen ohne API-Key — Anleitung in `backtest/README.md`.
+
+Ehrliche Risiken dieses Marktes gegenüber CME-Gold (GC/MGC):
+- **Dünne Liquidität außerhalb der Haupt-Sessions + Flash-Crash-Historie**
+  (Okt. 2025: −100 $ in unter einer Minute). Deshalb: nur mit Stop-Orders
+  handeln, Wochenenden aussetzen (`--skip-weekends`), Positionsgröße nach
+  Risiko-%, nie nach Hebel.
+- **Kosten**: Taker-Fee ~0,045 % + 8h-Funding + Slippage → im Backtest
+  konservativ `--cost-r 0.06` ansetzen.
+- **Prop-Kontext**: Prop-Firmen (FTMO/Topstep) lassen kein Hyperliquid zu —
+  die Challenge läuft auf CME-Gold (MGC). Hyperliquid ist der Live-Markt
+  fürs eigene Konto; die Setups sind dieselben, aber beide Varianten
+  getrennt backtesten (Oracle-Preis ≠ Futures-Preis).
+
 ## Testprotokoll (so prüfen wir Profitabilität seriös)
 
 1. **Entweder** Script im TradingView Strategy Tester laden (MNQ 5m,
