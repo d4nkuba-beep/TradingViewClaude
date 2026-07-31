@@ -49,6 +49,22 @@ Extrem anzeigt.
 - Ziel-Linie (blau, Spike-Ursprung) und Stop-Referenz (rot gepunktet,
   Spike-Extrem) während des aktiven Setups.
 
+## A/D-Filter (Accumulation/Distribution)
+
+Optionaler Zusatzfilter (Input **„A/D-Bestätigung"**, Standard: Aus) für
+sauberere Reversal-Trades:
+
+- **Divergenz am Spike:** Der Preis macht am Spike ein neues Extrem, die
+  A/D-Linie bestätigt es nicht (kein neues A/D-Tief/-Hoch im Lookback,
+  Standard 30 Bars) → Akkumulation bzw. Distribution gegen den Spike.
+  Nur dann wird das Setup überhaupt aktiviert.
+- **A/D-Steigung beim BOS:** Die A/D-Linie muss beim Armieren des
+  BOS-Entries bereits in Trade-Richtung drehen (Standard: 5 Bars).
+- **Beide:** kombiniert beide Bedingungen.
+
+Im Python-Backtester per `--ad-mode aus|divergenz|slope|beide`;
+`--compare-ad` testet alle vier Modi auf denselben Daten gegeneinander.
+
 ## Lokaler M1-Backtest (Python)
 
 `backtest/orb_spike_reversal_backtest.py` ist ein 1:1-Port der

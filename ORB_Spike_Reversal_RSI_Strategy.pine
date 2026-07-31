@@ -9,6 +9,9 @@
 //      und Ausbruch innerhalb weniger Bars (Geschwindigkeit)
 //    - RSI-Filter: Spike nach unten nur bei überverkauftem RSI → Long-Reversal,
 //      Spike nach oben nur bei überkauftem RSI → Short-Reversal
+//    - Optionaler A/D-Filter (Accumulation/Distribution): Divergenz am Spike
+//      (Preis macht neues Extrem, A/D-Linie nicht) und/oder A/D-Steigung in
+//      Trade-Richtung beim Armieren des BOS-Entries
 //    - Entry: Break of Structure (BOS) – Stop-Order über dem ersten Pivot-Hoch
 //      nach dem Spike-Tief (Short spiegelbildlich unter dem Pivot-Tief)
 //    - Stop-Loss: am Spike-Extrem ("stoploss placement: at the extreme")
@@ -41,6 +44,16 @@ grpF   = "RSI-Reversal-Filter"
 rsiLen = input.int(14, "RSI-Länge", minval=2, group=grpF)
 rsiOS  = input.float(30.0, "Überverkauft: Long-Reversal bei RSI ≤", minval=1, maxval=50, group=grpF)
 rsiOB  = input.float(70.0, "Überkauft: Short-Reversal bei RSI ≥", minval=50, maxval=99, group=grpF)
+
+// ─── A/D-Filter (Accumulation/Distribution) ─────────────────────────────────
+grpA        = "A/D-Filter (Accumulation/Distribution)"
+adMode      = input.string("Aus", "A/D-Bestätigung",
+     options=["Aus", "Divergenz am Spike", "AD-Steigung beim BOS", "Beide"], group=grpA,
+     tooltip="Divergenz: Preis macht am Spike ein neues Extrem, die A/D-Linie nicht" +
+     " (Akkumulation/Distribution gegen den Spike). Steigung: Die A/D-Linie muss" +
+     " beim Armieren des BOS-Entries bereits in Trade-Richtung drehen.")
+adLookback  = input.int(30, "Lookback für A/D-Divergenz (Bars)", minval=5, group=grpA)
+adSlopeBars = input.int(5, "Bars für A/D-Steigung", minval=1, group=grpA)
 
 // ─── Fast Spike ─────────────────────────────────────────────────────────────
 grpK      = "Fast Spike (außerhalb der ORB)"
@@ -81,6 +94,16 @@ hiN  = ta.highest(high, speedBars)
 loN  = ta.lowest(low, speedBars)
 ph   = ta.pivothigh(strLeft, strRight)
 pl   = ta.pivotlow(strLeft, strRight)
+
+// A/D-Linie: Divergenz gegen das Spike-Extrem bzw. Steigung beim BOS
+adLine     = ta.accdist
+adPrevLo   = ta.lowest(adLine, adLookback)[1]
+adPrevHi   = ta.highest(adLine, adLookback)[1]
+adSlope    = adLine - adLine[adSlopeBars]
+useAdDiv   = adMode == "Divergenz am Spike" or adMode == "Beide"
+useAdSlope = adMode == "AD-Steigung beim BOS" or adMode == "Beide"
+adDivLongOk  = not useAdDiv or adLine > adPrevLo   // Preis neues Tief, A/D nicht → Akkumulation
+adDivShortOk = not useAdDiv or adLine < adPrevHi   // Preis neues Hoch, A/D nicht → Distribution
 
 bosOff = bosOffTicks * syminfo.mintick
 slOff  = slOffTicks * syminfo.mintick
@@ -222,10 +245,12 @@ rng = orbHigh - orbLow
 canSetup = orbDone and inTrd and not inEod and strategy.position_size == 0
      and setupDir == 0 and dayTrades < maxTrades and not na(rng) and rng > 0
 
-// Spike nach unten: schnell unter das ORB-Tief + RSI überverkauft → Long-Setup
-spikeDown = canSetup and low < orbLow - spikeAtr * atrV and hiN > orbLow and rsiV <= rsiOS
-// Spike nach oben: schnell über das ORB-Hoch + RSI überkauft → Short-Setup
-spikeUp   = canSetup and high > orbHigh + spikeAtr * atrV and loN < orbHigh and rsiV >= rsiOB
+// Spike nach unten: schnell unter das ORB-Tief + RSI überverkauft (+ A/D-Divergenz) → Long-Setup
+spikeDown = canSetup and low < orbLow - spikeAtr * atrV and hiN > orbLow
+     and rsiV <= rsiOS and adDivLongOk
+// Spike nach oben: schnell über das ORB-Hoch + RSI überkauft (+ A/D-Divergenz) → Short-Setup
+spikeUp   = canSetup and high > orbHigh + spikeAtr * atrV and loN < orbHigh
+     and rsiV >= rsiOB and adDivShortOk
 
 if spikeDown or spikeUp
     setupDir    := spikeDown ? 1 : -1
@@ -240,7 +265,8 @@ if spikeDown or spikeUp
              math.max(spikeOrigin, spikeExt), bar_index, math.min(spikeOrigin, spikeExt),
              border_color=color.new(color.yellow, 30), bgcolor=color.new(color.yellow, 80))
         label.new(bar_index, spikeDown ? low : high,
-             "Fast Spike · RSI " + str.tostring(rsiV, "#.0"),
+             "Fast Spike · RSI " + str.tostring(rsiV, "#.0") +
+             (useAdDiv ? " · A/D-Div ✓" : ""),
              style=spikeDown ? label.style_label_up : label.style_label_down,
              color=color.new(color.yellow, 20), textcolor=color.black, size=size.small)
     // Target (Spike-Ursprung) und Stop-Referenz (Spike-Extrem) einzeichnen
@@ -295,6 +321,7 @@ if setupDir == 1 and strategy.position_size == 0 and not na(bosLvl)
     risk   = entryPx - slPx
     reward = tpMode == "R-Multiple" ? tpR * risk : tpPx - entryPx
     if risk > 0 and reward > 0 and (minRR == 0 or reward >= minRR * risk)
+         and (not useAdSlope or adSlope > 0)
         strategy.entry("Rev Long", strategy.long, stop=entryPx)
         pendSl := slPx
         pendTp := tpPx
@@ -310,6 +337,7 @@ if setupDir == -1 and strategy.position_size == 0 and not na(bosLvl)
     risk   = slPx - entryPx
     reward = tpMode == "R-Multiple" ? tpR * risk : entryPx - tpPx
     if risk > 0 and reward > 0 and (minRR == 0 or reward >= minRR * risk)
+         and (not useAdSlope or adSlope < 0)
         strategy.entry("Rev Short", strategy.short, stop=entryPx)
         pendSl := slPx
         pendTp := tpPx

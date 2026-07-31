@@ -63,6 +63,9 @@ class Params:
     min_rr: float = 0.5
     max_trades: int = 2
     commission_per_fill: float = 1.25  # $ je Kontrakt und Fill
+    ad_mode: str = "aus"               # aus | divergenz | slope | beide
+    ad_lookback: int = 30
+    ad_slope_bars: int = 5
 
 
 @dataclass
@@ -114,6 +117,13 @@ def wilder_rsi(close: np.ndarray, length: int) -> np.ndarray:
     return rsi
 
 
+def accdist(h: np.ndarray, l: np.ndarray, c: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Accumulation/Distribution-Linie (wie ta.accdist)."""
+    rng = h - l
+    mfm = np.where(rng > 0, ((c - l) - (h - c)) / np.where(rng > 0, rng, 1.0), 0.0)
+    return np.cumsum(mfm * v)
+
+
 def wilder_atr(h: np.ndarray, l: np.ndarray, c: np.ndarray, length: int) -> np.ndarray:
     prev_c = np.roll(c, 1)
     prev_c[0] = np.nan
@@ -134,6 +144,20 @@ def run_backtest(df: pd.DataFrame, p: Params, sym: dict, verbose: bool = False):
     atr = wilder_atr(h, l, c, p.atr_len)
     hi_n = pd.Series(h).rolling(p.speed_bars, min_periods=1).max().to_numpy()
     lo_n = pd.Series(l).rolling(p.speed_bars, min_periods=1).min().to_numpy()
+
+    # A/D-Filter
+    use_ad_div = p.ad_mode in ("divergenz", "beide")
+    use_ad_slope = p.ad_mode in ("slope", "beide")
+    if (use_ad_div or use_ad_slope) and "volume" not in df.columns:
+        sys.exit("A/D-Filter benötigt eine 'volume'-Spalte in den Daten.")
+    if use_ad_div or use_ad_slope:
+        ad = accdist(h, l, c, df["volume"].to_numpy(dtype=float))
+        ad_s = pd.Series(ad)
+        ad_prev_lo = ad_s.rolling(p.ad_lookback).min().shift(1).to_numpy()
+        ad_prev_hi = ad_s.rolling(p.ad_lookback).max().shift(1).to_numpy()
+        ad_slope = ad_s.diff(p.ad_slope_bars).to_numpy()
+    else:
+        ad = ad_prev_lo = ad_prev_hi = ad_slope = np.zeros(len(df))
 
     bos_off = p.bos_off_ticks * sym["tick"]
     sl_off = p.sl_off_ticks * sym["tick"]
@@ -269,8 +293,12 @@ def run_backtest(df: pd.DataFrame, p: Params, sym: dict, verbose: bool = False):
                      and not np.isnan(rng) and rng > 0 and not np.isnan(atr[i])
                      and not np.isnan(rsi[i]))
         if can_setup:
-            spike_dn = l[i] < orb_lo - p.spike_atr * atr[i] and hi_n[i] > orb_lo and rsi[i] <= p.rsi_os
-            spike_up = h[i] > orb_hi + p.spike_atr * atr[i] and lo_n[i] < orb_hi and rsi[i] >= p.rsi_ob
+            ad_div_long_ok = not use_ad_div or (not np.isnan(ad_prev_lo[i]) and ad[i] > ad_prev_lo[i])
+            ad_div_short_ok = not use_ad_div or (not np.isnan(ad_prev_hi[i]) and ad[i] < ad_prev_hi[i])
+            spike_dn = (l[i] < orb_lo - p.spike_atr * atr[i] and hi_n[i] > orb_lo
+                        and rsi[i] <= p.rsi_os and ad_div_long_ok)
+            spike_up = (h[i] > orb_hi + p.spike_atr * atr[i] and lo_n[i] < orb_hi
+                        and rsi[i] >= p.rsi_ob and ad_div_short_ok)
             if spike_dn or spike_up:
                 setup_dir = 1 if spike_dn else -1
                 spike_ext = l[i] if spike_dn else h[i]
@@ -313,7 +341,10 @@ def run_backtest(df: pd.DataFrame, p: Params, sym: dict, verbose: bool = False):
                       "gegenseite": orb_lo}.get(p.tp_mode, np.nan)
                 risk = sl - entry
                 reward = p.tp_r * risk if p.tp_mode == "r-multiple" else entry - tp
-            if risk > 0 and reward > 0 and (p.min_rr == 0 or reward >= p.min_rr * risk):
+            ad_slope_ok = (not use_ad_slope
+                           or (setup_dir == 1 and ad_slope[i] > 0)
+                           or (setup_dir == -1 and ad_slope[i] < 0))
+            if risk > 0 and reward > 0 and (p.min_rr == 0 or reward >= p.min_rr * risk) and ad_slope_ok:
                 pending = {"dir": "long" if setup_dir == 1 else "short",
                            "stop": entry, "sl": sl, "tp": tp, "placed_bar": i}
             else:
@@ -420,9 +451,10 @@ def gen_synth(days: int = 60, seed: int = 42, start_price: float = 20000.0) -> p
             wick = abs(rng.normal(0, vol * 0.5))
             hi = max(op, cl) + wick
             lo = min(op, cl) - wick
+            vol_base = 1500 * (1.8 if b < 30 else 1.0)
+            volu = int(vol_base * (0.5 + abs(m) / vol) * rng.uniform(0.6, 1.6))
             rows.append((ts, round(op * 4) / 4, round(hi * 4) / 4,
-                         round(lo * 4) / 4, round(cl * 4) / 4,
-                         int(rng.integers(500, 5000))))
+                         round(lo * 4) / 4, round(cl * 4) / 4, max(volu, 50)))
             price = cl
         price += rng.normal(0, 15)              # Overnight-Gap
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
@@ -459,13 +491,21 @@ def main():
     ap.add_argument("--spike-atr", type=float, default=0.5)
     ap.add_argument("--min-rr", type=float, default=0.5)
     ap.add_argument("--max-trades", type=int, default=2)
+    ap.add_argument("--ad-mode", default="aus", choices=["aus", "divergenz", "slope", "beide"],
+                    help="A/D-Filter: Divergenz am Spike und/oder A/D-Steigung beim BOS")
+    ap.add_argument("--ad-lookback", type=int, default=30)
+    ap.add_argument("--ad-slope-bars", type=int, default=5)
+    ap.add_argument("--compare-ad", action="store_true",
+                    help="alle vier A/D-Modi auf denselben Daten vergleichen")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--verbose", action="store_true", help="Spike-Setups mitloggen")
     ap.add_argument("--trades-csv", metavar="PFAD", help="Trades als CSV speichern")
     args = ap.parse_args()
 
     p = Params(tp_mode=args.tp_mode, rsi_os=args.rsi_os, rsi_ob=args.rsi_ob,
-               spike_atr=args.spike_atr, min_rr=args.min_rr, max_trades=args.max_trades)
+               spike_atr=args.spike_atr, min_rr=args.min_rr, max_trades=args.max_trades,
+               ad_mode=args.ad_mode, ad_lookback=args.ad_lookback,
+               ad_slope_bars=args.ad_slope_bars)
     sym = SYMBOLS[args.symbol]
 
     if args.csv:
@@ -477,6 +517,30 @@ def main():
                  f"(nur Logik-Validierung!)")
 
     print(f"Bars: {len(df)}  |  Zeitraum: {df.index[0]} – {df.index[-1]}")
+
+    if args.compare_ad:
+        pv = sym["point_value"]
+        comm = 2 * p.commission_per_fill
+        print(f"\n{'═' * 74}\n  A/D-Filter-Vergleich: {label}\n{'═' * 74}")
+        print(f"  {'A/D-Modus':<14}{'Trades':>8}{'Winrate':>10}{'Netto $':>14}"
+              f"{'PF':>7}{'Max DD $':>12}")
+        for mode in ["aus", "divergenz", "slope", "beide"]:
+            pm = Params(**{**vars(p), "ad_mode": mode})
+            trs = run_backtest(df, pm, sym)
+            if not trs:
+                print(f"  {mode:<14}{0:>8}{'—':>10}{'—':>14}{'—':>7}{'—':>12}")
+                continue
+            pnl = np.array([t.points * pv - comm for t in trs])
+            wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
+            eq = np.cumsum(pnl)
+            dd = (np.maximum.accumulate(eq) - eq).max()
+            pf = wins.sum() / -losses.sum() if losses.sum() < 0 else float("inf")
+            print(f"  {mode:<14}{len(trs):>8}{len(wins) / len(pnl) * 100:>9.1f}%"
+                  f"{pnl.sum():>14,.2f}{pf:>7.2f}{dd:>12,.2f}")
+        print("\n  Hinweis: 'divergenz' filtert am Spike, 'slope' beim BOS-Entry,")
+        print("  'beide' kombiniert beides.")
+        return
+
     trades = run_backtest(df, p, sym, verbose=args.verbose)
     report(trades, sym, p, label)
 
