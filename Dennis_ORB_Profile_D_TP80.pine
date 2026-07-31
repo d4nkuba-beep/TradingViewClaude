@@ -1,0 +1,334 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0
+//@version=6
+// Best grid result under DD <= 1800 on Massive MNQM6 5m, 2026-04-05 to 2026-06-12.
+// TV-MATCHED: 5m ORB default, native M5 calculation, date filter ON, strong breakout bypass OFF. Optimizer defaults: single fixed TP80, SL50, maxBars2, maxDay2, maxWeek10, sweepFresh8, minBody35.
+strategy("Dennis ORB Profile D Optimized TP80 TV-Matched", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, max_boxes_count=200, max_labels_count=400, initial_capital=50000)
+
+// ============================================================
+// Dennis NY ORB Decision Engine
+// Educational/backtest script only. Validate in TradingView before live use.
+// Wick-only ORB pierces are invalid: breakout entries require close outside OR.
+// V2 adds: previous-week bias filter, breakout retest entries, Wyckoff sweep freshness, fixed-point targets, max-bars risk control.
+// Profile D: disables pure retest entries because Yahoo test showed retests underperformed; keeps Direct Breakout + Fakeout/Reclaim.
+// ============================================================
+
+// ----- Sessions / timeframe -----
+tz = input.string("America/New_York", "Timezone")
+signalTf = input.timeframe("5", "Signal timeframe", options=["5", "15"])
+orbMode = input.string("5m ORB", "Opening range", options=["5m ORB", "15m ORB"])
+tradeWindowMode = input.string("First 4h after NY open", "Trade window", options=["First 4h after NY open", "Until 11:00 NY", "Custom"])
+customTradeSession = input.session("0945-1330", "Custom trade session")
+
+orbSession = orbMode == "5m ORB" ? "0930-0935" : "0930-0945"
+defaultTradeSession = orbMode == "5m ORB" ? "0935-1330" : "0945-1330"
+tradeSession = tradeWindowMode == "First 4h after NY open" ? defaultTradeSession : tradeWindowMode == "Until 11:00 NY" ? (orbMode == "5m ORB" ? "0935-1100" : "0945-1100") : customTradeSession
+
+// ----- Modules -----
+enableLongs = input.bool(true, "Enable longs")
+enableShorts = input.bool(true, "Enable shorts")
+enableBreakouts = input.bool(true, "Enable direct ORB continuation breakouts")
+enableBreakoutRetests = input.bool(false, "Enable ORB breakout retest entries")
+enableFakeouts = input.bool(true, "Enable ORB fakeout/sweep reversals")
+breakoutTrigger = input.string("Any close outside OR", "Breakout trigger", options=["Cross outside OR", "Any close outside OR"])
+breakoutRetestBars = input.int(6, "Retest valid bars after breakout", minval=1, maxval=30)
+breakoutRetestTolerance = input.float(5.0, "Retest tolerance points", minval=0.0, step=0.25)
+maxBarsAfterSweep = input.int(8, "Max bars after sweep for fakeout", minval=1, maxval=100)
+weeklyBiasMode = input.string("Strict previous week", "Weekly bias", options=["Off", "Strict previous week", "Soft label only"])
+showWeeklyBiasLabel = input.bool(true, "Show weekly bias label")
+
+// ----- Filters -----
+useEmaFilter = input.bool(true, "Use EMA 9/21 directional filter")
+useVwapFilter = input.bool(false, "Use VWAP directional filter")
+strongBreakoutBypass = input.bool(false, "Strong breakout can bypass EMA/VWAP")
+emaFastLen = input.int(9, "Fast EMA", minval=1)
+emaSlowLen = input.int(21, "Slow EMA", minval=1)
+minCloseBeyondPts = input.float(0.0, "Min close beyond OR", minval=0.0, step=0.25)
+minBodyPct = input.float(35.0, "Min breakout candle body %", minval=0.0, maxval=100.0, step=1.0)
+closeLocationPct = input.float(25.0, "Close must be within X% of candle extreme", minval=1.0, maxval=50.0, step=1.0)
+strongBodyPct = input.float(70.0, "Strong breakout body % for bypass", minval=0.0, maxval=100.0, step=1.0)
+minOrbRange = input.float(20.0, "Min ORB range points", minval=0.0, step=1.0)
+maxOrbRange = input.float(180.0, "Max ORB range points", minval=0.0, step=1.0)
+noTradeZone = input.string("Block 25-75 middle", "No-trade-zone filter", options=["Off", "Block full OR High/Low", "Block 25-75 middle"])
+
+// ----- Risk / exits -----
+maxTradesPerDay = input.int(2, "Max trades per day", minval=1, maxval=10)
+maxTradesPerWeek = input.int(10, "Max trades per week", minval=1, maxval=50)
+minBarsBetweenTrades = input.int(2, "Min bars between trades", minval=0, maxval=200)
+requireFlatBeforeNewTrade = input.bool(true, "Require first trade closed before new trade")
+totalContracts = input.float(5, "Total contracts", minval=0.0, step=1.0)
+tp1Contracts = input.float(5, "TP1 contracts", minval=0.0, step=1.0)
+tp2Contracts = input.float(0, "TP2 contracts", minval=0.0, step=1.0)
+targetMode = input.string("Fixed points", "Target mode", options=["Fixed points", "R multiple"])
+tp1FixedPoints = input.float(80.0, "TP1 fixed points", minval=0.25, step=0.25)
+tp2FixedPoints = input.float(80.0, "TP2 fixed points", minval=0.25, step=0.25)
+tp1R = input.float(1.0, "TP1 R multiple", minval=0.1, step=0.1)
+tp2R = input.float(2.0, "TP2 R multiple", minval=0.1, step=0.1)
+stopMode = input.string("Fixed Points", "Stop mode", options=["Fixed Points", "OR Opposite Side", "Signal Candle", "Sweep Wick", "ATR"])
+fixedStopPts = input.float(50.0, "Fixed stop points", minval=0.25, step=0.25)
+stopBufferPts = input.float(5.0, "Structure/sweep stop buffer", minval=0.0, step=0.25)
+atrLen = input.int(14, "ATR length", minval=1)
+atrMult = input.float(1.5, "ATR stop multiplier", minval=0.1, step=0.1)
+useMaxBarsExit = input.bool(true, "Close after max bars")
+maxBarsInTrade = input.int(2, "Max bars in trade", minval=1, maxval=100)
+maxBarsExitMode = input.string("Only if negative", "Max bars exit mode", options=["Always", "Only if negative"])
+
+// ----- Visuals / alerts -----
+showOrbBox = input.bool(true, "Show blue ORB box")
+showSignalLabels = input.bool(true, "Show signal labels")
+showTradeBoxes = input.bool(true, "Show trade plan boxes")
+boxBarsRight = input.int(24, "Trade boxes extend bars", minval=1, maxval=200)
+
+// ----- Backtest matching -----
+// These defaults match the Massive optimizer window. Turn off only when you intentionally test more history.
+useDateFilter = input.bool(true, "Use optimizer date filter")
+startDate = input.time(timestamp("America/New_York", 2026, 4, 5, 0, 0), "Start date")
+endDate = input.time(timestamp("America/New_York", 2026, 6, 12, 16, 0), "End date")
+inDateRange = not useDateFilter or (time >= startDate and time <= endDate)
+
+// ============================================================
+// Signal calculation in selected M5/M15 context
+// ============================================================
+f_calc() =>
+    newDay = ta.change(time("D", "0000-2359", tz)) != 0
+    inOrb = not na(time(timeframe.period, orbSession, tz))
+    inTrade = not na(time(timeframe.period, tradeSession, tz))
+
+    var float orHigh = na
+    var float orLow = na
+    var bool orbDone = false
+    var bool sweptHigh = false
+    var bool sweptLow = false
+    var float sweepHigh = na
+    var float sweepLow = na
+    var int sweepHighBar = na
+    var int sweepLowBar = na
+    var bool longBreakoutSeen = false
+    var bool shortBreakoutSeen = false
+    var int longBreakoutBar = na
+    var int shortBreakoutBar = na
+
+    if newDay
+        orHigh := na
+        orLow := na
+        orbDone := false
+        sweptHigh := false
+        sweptLow := false
+        sweepHigh := na
+        sweepLow := na
+        sweepHighBar := na
+        sweepLowBar := na
+        longBreakoutSeen := false
+        shortBreakoutSeen := false
+        longBreakoutBar := na
+        shortBreakoutBar := na
+
+    if inOrb
+        orHigh := na(orHigh) ? high : math.max(orHigh, high)
+        orLow := na(orLow) ? low : math.min(orLow, low)
+        orbDone := false
+    else if not inOrb and not na(orHigh) and not na(orLow)
+        orbDone := true
+
+    orMid = not na(orHigh) and not na(orLow) ? (orHigh + orLow) / 2.0 : na
+    or25 = not na(orHigh) and not na(orLow) ? orLow + (orHigh - orLow) * 0.25 : na
+    or75 = not na(orHigh) and not na(orLow) ? orLow + (orHigh - orLow) * 0.75 : na
+    orRange = not na(orHigh) and not na(orLow) ? orHigh - orLow : na
+
+    if orbDone and high > orHigh
+        sweptHigh := true
+        sweepHigh := na(sweepHigh) ? high : math.max(sweepHigh, high)
+        sweepHighBar := na(sweepHighBar) ? bar_index : sweepHighBar
+    if orbDone and low < orLow
+        sweptLow := true
+        sweepLow := na(sweepLow) ? low : math.min(sweepLow, low)
+        sweepLowBar := na(sweepLowBar) ? bar_index : sweepLowBar
+
+    emaFast = ta.ema(close, emaFastLen)
+    emaSlow = ta.ema(close, emaSlowLen)
+    vwapVal = ta.vwap(hlc3)
+    atrVal = ta.atr(atrLen)
+
+    body = math.abs(close - open)
+    candleRange = high - low
+    bodyPct = candleRange > 0 ? body / candleRange * 100.0 : 0.0
+    closeNearHigh = candleRange > 0 ? (high - close) / candleRange * 100.0 <= closeLocationPct : false
+    closeNearLow = candleRange > 0 ? (close - low) / candleRange * 100.0 <= closeLocationPct : false
+    strongBull = close > open and bodyPct >= strongBodyPct and closeNearHigh
+    strongBear = close < open and bodyPct >= strongBodyPct and closeNearLow
+    qualityBull = close > open and bodyPct >= minBodyPct and closeNearHigh
+    qualityBear = close < open and bodyPct >= minBodyPct and closeNearLow
+
+    rangeOk = orbDone and not na(orRange) and orRange >= minOrbRange and orRange <= maxOrbRange
+    emaBull = not useEmaFilter or emaFast > emaSlow
+    emaBear = not useEmaFilter or emaFast < emaSlow
+    vwapBull = not useVwapFilter or close > vwapVal
+    vwapBear = not useVwapFilter or close < vwapVal
+    bullAlign = emaBull and vwapBull
+    bearAlign = emaBear and vwapBear
+    bullFiltersOk = bullAlign or (strongBreakoutBypass and strongBull)
+    bearFiltersOk = bearAlign or (strongBreakoutBypass and strongBear)
+
+    longZoneOk = noTradeZone == "Off" ? true : noTradeZone == "Block full OR High/Low" ? close >= orHigh : close >= or75
+    shortZoneOk = noTradeZone == "Off" ? true : noTradeZone == "Block full OR High/Low" ? close <= orLow : close <= or25
+
+    longCloseOutside = close > orHigh + minCloseBeyondPts
+    shortCloseOutside = close < orLow - minCloseBeyondPts
+    longCross = ta.crossover(close, orHigh + minCloseBeyondPts)
+    shortCross = ta.crossunder(close, orLow - minCloseBeyondPts)
+    longBreakTrigger = breakoutTrigger == "Cross outside OR" ? longCross : longCloseOutside
+    shortBreakTrigger = breakoutTrigger == "Cross outside OR" ? shortCross : shortCloseOutside
+
+    if rangeOk and longCloseOutside
+        longBreakoutSeen := true
+        longBreakoutBar := na(longBreakoutBar) ? bar_index : longBreakoutBar
+    if rangeOk and shortCloseOutside
+        shortBreakoutSeen := true
+        shortBreakoutBar := na(shortBreakoutBar) ? bar_index : shortBreakoutBar
+
+    longBreakoutRetest = enableBreakoutRetests and longBreakoutSeen and not na(longBreakoutBar) and bar_index > longBreakoutBar and bar_index <= longBreakoutBar + breakoutRetestBars and low <= orHigh + breakoutRetestTolerance and close > orHigh
+    shortBreakoutRetest = enableBreakoutRetests and shortBreakoutSeen and not na(shortBreakoutBar) and bar_index > shortBreakoutBar and bar_index <= shortBreakoutBar + breakoutRetestBars and high >= orLow - breakoutRetestTolerance and close < orLow
+
+    longBreakout = enableBreakouts and enableLongs and inTrade and rangeOk and longBreakTrigger and qualityBull and bullFiltersOk and longZoneOk
+    shortBreakout = enableBreakouts and enableShorts and inTrade and rangeOk and shortBreakTrigger and qualityBear and bearFiltersOk and shortZoneOk
+    longRetest = enableLongs and inTrade and rangeOk and longBreakoutRetest and bullFiltersOk and longZoneOk
+    shortRetest = enableShorts and inTrade and rangeOk and shortBreakoutRetest and bearFiltersOk and shortZoneOk
+
+    longSweepFresh = not na(sweepLowBar) and bar_index <= sweepLowBar + maxBarsAfterSweep
+    shortSweepFresh = not na(sweepHighBar) and bar_index <= sweepHighBar + maxBarsAfterSweep
+    longFakeout = enableFakeouts and enableLongs and inTrade and rangeOk and sweptLow and longSweepFresh and close > orLow and close > open and (close > orMid or bullFiltersOk)
+    shortFakeout = enableFakeouts and enableShorts and inTrade and rangeOk and sweptHigh and shortSweepFresh and close < orHigh and close < open and (close < orMid or bearFiltersOk)
+
+    longSignal = longBreakout or longRetest or longFakeout
+    shortSignal = shortBreakout or shortRetest or shortFakeout
+    setupType = longBreakout ? 1 : shortBreakout ? -1 : longRetest ? 3 : shortRetest ? -3 : longFakeout ? 2 : shortFakeout ? -2 : 0
+
+    sigStopLong = stopMode == "Fixed Points" ? close - fixedStopPts : stopMode == "OR Opposite Side" ? orLow - stopBufferPts : stopMode == "Signal Candle" ? low - stopBufferPts : stopMode == "Sweep Wick" and not na(sweepLow) ? sweepLow - stopBufferPts : close - atrVal * atrMult
+    sigStopShort = stopMode == "Fixed Points" ? close + fixedStopPts : stopMode == "OR Opposite Side" ? orHigh + stopBufferPts : stopMode == "Signal Candle" ? high + stopBufferPts : stopMode == "Sweep Wick" and not na(sweepHigh) ? sweepHigh + stopBufferPts : close + atrVal * atrMult
+
+    [orHigh, orLow, orMid, or25, or75, orRange, emaFast, emaSlow, vwapVal, longSignal, shortSignal, setupType, sigStopLong, sigStopShort, inOrb, inTrade]
+
+[orHigh, orLow, orMid, or25, or75, orRange, emaFast, emaSlow, vwapVal, longSignal, shortSignal, setupType, sigStopLong, sigStopShort, inOrb, inTrade] = f_calc()
+
+// ============================================================
+// Orders and exits
+// ============================================================
+longEntry = close
+shortEntry = close
+longRisk = math.max(longEntry - sigStopLong, syminfo.mintick)
+shortRisk = math.max(sigStopShort - shortEntry, syminfo.mintick)
+longTp1 = targetMode == "Fixed points" ? longEntry + tp1FixedPoints : longEntry + longRisk * tp1R
+longTp2 = targetMode == "Fixed points" ? longEntry + tp2FixedPoints : longEntry + longRisk * tp2R
+shortTp1 = targetMode == "Fixed points" ? shortEntry - tp1FixedPoints : shortEntry - shortRisk * tp1R
+shortTp2 = targetMode == "Fixed points" ? shortEntry - tp2FixedPoints : shortEntry - shortRisk * tp2R
+
+// ----- Previous-week directional bias -----
+prevWeekOpen = request.security(syminfo.tickerid, "W", open[1], barmerge.gaps_off, barmerge.lookahead_off)
+prevWeekClose = request.security(syminfo.tickerid, "W", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+weeklyBiasLong = prevWeekClose > prevWeekOpen
+weeklyBiasShort = prevWeekClose < prevWeekOpen
+weeklyLongOk = weeklyBiasMode != "Strict previous week" or weeklyBiasLong
+weeklyShortOk = weeklyBiasMode != "Strict previous week" or weeklyBiasShort
+
+// ----- Daily/weekly trade limiter -----
+// Counts actual entries, not raw signals. This keeps the first trade behavior
+// close to the original version, but allows a second/third trade after the
+// configured spacing and flat-position filter.
+newDayForTradeCount = ta.change(time("D", "0000-2359", tz)) != 0
+var int tradesToday = 0
+var int tradesThisWeek = 0
+var int lastEntryBar = na
+var int activeEntryBar = na
+if newDayForTradeCount
+    tradesToday := 0
+
+newWeekForTradeCount = ta.change(time("W", "0000-2359", tz)) != 0
+if newWeekForTradeCount
+    tradesThisWeek := 0
+    lastEntryBar := na
+
+barsSinceLastTradeOk = na(lastEntryBar) or bar_index - lastEntryBar >= minBarsBetweenTrades
+flatFilterOk = not requireFlatBeforeNewTrade or strategy.position_size == 0
+canEnterNewTrade = inDateRange and tradesToday < maxTradesPerDay and tradesThisWeek < maxTradesPerWeek and barsSinceLastTradeOk and flatFilterOk
+
+enterLong = longSignal and weeklyLongOk and canEnterNewTrade
+enterShort = shortSignal and weeklyShortOk and canEnterNewTrade
+
+if enterLong
+    strategy.entry("Long", strategy.long, qty=totalContracts)
+    if tp1Contracts > 0
+        strategy.exit("Long TP1", from_entry="Long", qty=tp1Contracts, stop=sigStopLong, limit=longTp1)
+    if tp2Contracts > 0
+        strategy.exit("Long TP2", from_entry="Long", qty=tp2Contracts, stop=sigStopLong, limit=longTp2)
+    tradesToday += 1
+    tradesThisWeek += 1
+    lastEntryBar := bar_index
+    activeEntryBar := bar_index
+
+else if enterShort
+    strategy.entry("Short", strategy.short, qty=totalContracts)
+    if tp1Contracts > 0
+        strategy.exit("Short TP1", from_entry="Short", qty=tp1Contracts, stop=sigStopShort, limit=shortTp1)
+    if tp2Contracts > 0
+        strategy.exit("Short TP2", from_entry="Short", qty=tp2Contracts, stop=sigStopShort, limit=shortTp2)
+    tradesToday += 1
+    tradesThisWeek += 1
+    lastEntryBar := bar_index
+    activeEntryBar := bar_index
+
+// ----- Max-bars risk exit -----
+if strategy.position_size != 0 and not na(activeEntryBar)
+    barsInTrade = bar_index - activeEntryBar
+    longLosing = strategy.position_size > 0 and close < strategy.position_avg_price
+    shortLosing = strategy.position_size < 0 and close > strategy.position_avg_price
+    shouldCloseByBars = useMaxBarsExit and barsInTrade >= maxBarsInTrade and (maxBarsExitMode == "Always" or longLosing or shortLosing)
+    if shouldCloseByBars
+        strategy.close_all("Max bars")
+if strategy.position_size == 0
+    activeEntryBar := na
+
+// ============================================================
+// Visuals
+// ============================================================
+plot(orHigh, "ORB High", color=color.new(color.blue, 0), linewidth=2)
+plot(orLow, "ORB Low", color=color.new(color.blue, 0), linewidth=2)
+plot(orMid, "ORB Mid", color=color.new(color.gray, 0), linewidth=1)
+plot(or25, "ORB 25%", color=color.new(color.gray, 65), linewidth=1)
+plot(or75, "ORB 75%", color=color.new(color.gray, 65), linewidth=1)
+plot(emaFast, "EMA Fast", color=color.new(color.yellow, 0))
+plot(emaSlow, "EMA Slow", color=color.new(color.orange, 0))
+plot(vwapVal, "VWAP", color=color.new(color.purple, 0))
+
+if showWeeklyBiasLabel and barstate.islast
+    label.new(bar_index, high, "Prev week bias: " + (weeklyBiasLong ? "LONG" : weeklyBiasShort ? "SHORT" : "NEUTRAL"), style=label.style_label_left, textcolor=color.white, color=color.new(weeklyBiasLong ? color.green : weeklyBiasShort ? color.red : color.gray, 0))
+
+var box orbBox = na
+newOrbStart = inOrb and not inOrb[1]
+if showOrbBox and newOrbStart
+    orbBox := box.new(left=bar_index, top=high, right=bar_index, bottom=low, bgcolor=color.new(color.blue, 86), border_color=color.new(color.blue, 25))
+if showOrbBox and inOrb and not na(orbBox)
+    box.set_right(orbBox, bar_index)
+    box.set_top(orbBox, math.max(box.get_top(orbBox), high))
+    box.set_bottom(orbBox, math.min(box.get_bottom(orbBox), low))
+if showOrbBox and not inOrb and not na(orbBox)
+    box.set_right(orbBox, bar_index)
+
+f_setupText(_setup) =>
+    _setup == 1 ? "ORB LONG" : _setup == -1 ? "ORB SHORT" : _setup == 3 ? "RETEST LONG" : _setup == -3 ? "RETEST SHORT" : _setup == 2 ? "FAKEOUT LONG" : _setup == -2 ? "FAKEOUT SHORT" : "SIGNAL"
+
+if showSignalLabels and enterLong
+    label.new(bar_index, low, f_setupText(setupType) + "\nTF: " + signalTf + "\nSL: " + str.tostring(sigStopLong, format.mintick) + "\nTP1: " + str.tostring(longTp1, format.mintick) + "\nTP2: " + str.tostring(longTp2, format.mintick), style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 0))
+if showSignalLabels and enterShort
+    label.new(bar_index, high, f_setupText(setupType) + "\nTF: " + signalTf + "\nSL: " + str.tostring(sigStopShort, format.mintick) + "\nTP1: " + str.tostring(shortTp1, format.mintick) + "\nTP2: " + str.tostring(shortTp2, format.mintick), style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0))
+
+if showTradeBoxes and enterLong
+    box.new(bar_index, longTp2, bar_index + boxBarsRight, longEntry, bgcolor=color.new(color.green, 84), border_color=color.new(color.green, 35))
+    box.new(bar_index, longEntry, bar_index + boxBarsRight, sigStopLong, bgcolor=color.new(color.red, 84), border_color=color.new(color.red, 35))
+if showTradeBoxes and enterShort
+    box.new(bar_index, shortEntry, bar_index + boxBarsRight, shortTp2, bgcolor=color.new(color.green, 84), border_color=color.new(color.green, 35))
+    box.new(bar_index, sigStopShort, bar_index + boxBarsRight, shortEntry, bgcolor=color.new(color.red, 84), border_color=color.new(color.red, 35))
+
+// ============================================================
+// Alerts
+// ============================================================
+alertcondition(enterLong, "NY ORB Long", "NY ORB LONG signal on {{ticker}}")
+alertcondition(enterShort, "NY ORB Short", "NY ORB SHORT signal on {{ticker}}")
