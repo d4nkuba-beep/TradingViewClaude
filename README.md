@@ -61,3 +61,36 @@ Alle Positionen werden um 15:55–16:00 New York glattgestellt.
   anpassen; Slippage im Strategy Tester zusätzlich einstellen.
 - Kein Anlage- oder Finanzberatung; Backtest-Ergebnisse garantieren
   keine zukünftige Performance.
+
+---
+
+# Dual Thrust Intraday (neu)
+
+**Datei:** `DualThrust_Strategy.pine` – Session-Breakout nach
+[je-suis-tm/quant-trading](https://github.com/je-suis-tm/quant-trading):
+Range der letzten N RTH-Tage, Stop-Buy bei `Open + K1·Range`, Stop-Sell bei
+`Open − K2·Range`, Stop-and-Reverse, flat zum Handelsschluss. Standard N=2, K=0,5.
+
+# Research
+
+`research/` enthält einen Python-Backtest-Harness auf TradingView-MCP-Daten
+(SPY/QQQ 5m/15m/30m) und die Auswertung der 5 GitHub-Strategiesammlungen aus
+[diesem Artikel](https://osaengine.com/en/blog/top-trading-strategies-github/):
+**[research/ANALYSE.md](research/ANALYSE.md)**.
+
+Kurz: Unsere IB-Retrace- und ORB-1R-Setups sind auf diesen Daten nicht
+profitabel. Dual Thrust (N=2, K=0,5) ist auf QQQ 2023–2026 in jedem Jahr
+positiv (Edge v. a. Short-Seite), auf DIA/IWM nicht → Kandidat für
+Paper-Trading auf QQQ/NQ im 5m-Chart, nach Bestätigung per Deep Backtesting.
+
+```bash
+pip install pandas numpy
+python3 research/run_setups.py AMEX_SPY_30m NASDAQ_QQQ_30m
+python3 research/run_dual_thrust.py
+python3 research/run_dt_years.py      # 1h, ~3 Jahre, je Jahr
+python3 research/run_dt_short.py      # Long/Short-Zerlegung
+python3 research/run_dt_checks.py     # Auflösung, N-Sensitivität
+```
+
+Neue Daten: `mcp-tv-get-ohlcv` (count=5000) aufrufen und die `bars` als
+`research/data/<EXCHANGE>_<TICKER>_<interval>.json` speichern.

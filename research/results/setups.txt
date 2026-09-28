@@ -1,0 +1,84 @@
+
+### AMEX_SPY_5m  (65 Tage, 2026-06-25 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)          39  33.3  0.57  -2.89   -1.13   1.37  -0.39  -0.73
+RET  + nur weite IB                          19  42.1  0.68  -2.78   -0.53   0.88  -0.16  -0.37
+ORB  Mitte-Stop, 1R (unser Setup 2)          52  48.1  0.75  -2.89    -1.5   2.06   0.16  -1.66
+ORB  Mitte-Stop, 2R                          52  42.3  0.78  -2.81   -1.46    2.4   0.56  -2.02
+ORB  Mitte-Stop, Halten bis EOD              52  36.5  0.64  -4.97   -2.59   2.82  -0.79   -1.8
+ORB  EOD + nur enge IB                       35  37.1  0.59  -5.17   -1.81   1.79  -0.26  -1.55
+ORB  1R + nur enge IB                        35  54.3  0.95  -0.53   -0.19    1.1   0.91   -1.1
+ORB  EOD, ohne VWAP-Filter                   52  34.6  0.67   -4.3   -2.23   2.51  -0.64  -1.59
+DT   Dual Thrust n4 k0.5 (je-suis-tm)        11  45.5  1.04   0.39    0.04   0.81   -0.1   0.14
+DT   Dual Thrust n4 k0.3                     38  44.7   0.5  -9.95   -3.78   4.32  -3.61  -0.17
+FC   Erste-Kerze-ORB -> EOD (Benchmark)      63  19.0  0.78  -2.77   -1.74    3.2  -1.25  -0.49
+
+### NASDAQ_QQQ_5m  (65 Tage, 2026-06-25 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)          40  20.0  0.32  -9.79   -3.92    3.5  -1.97  -1.95
+RET  + nur weite IB                          17  29.4   0.5  -8.89   -1.51   1.26  -0.25  -1.26
+ORB  Mitte-Stop, 1R (unser Setup 2)          51  37.3  0.59  -9.79   -4.99    6.7  -3.46  -1.53
+ORB  Mitte-Stop, 2R                          51  25.5  0.62  -9.95   -5.07   7.74  -3.24  -1.83
+ORB  Mitte-Stop, Halten bis EOD              51  23.5  0.53 -12.66   -6.46   8.32  -3.23  -3.23
+ORB  EOD + nur enge IB                       36  19.4  0.47 -12.91   -4.65   5.75  -2.16  -2.49
+ORB  1R + nur enge IB                        36  36.1  0.58  -8.81   -3.17   4.27   -2.6  -0.57
+ORB  EOD, ohne VWAP-Filter                   51  23.5  0.53 -12.81   -6.54    8.4  -3.36  -3.18
+DT   Dual Thrust n4 k0.5 (je-suis-tm)        12  25.0  0.27 -22.01   -2.64   2.47  -2.08  -0.56
+DT   Dual Thrust n4 k0.3                     31  45.2  1.14   1.91    0.59   1.32   0.16   0.43
+FC   Erste-Kerze-ORB -> EOD (Benchmark)      64  31.2  0.93  -1.45   -0.93   4.16  -1.49   0.56
+
+### AMEX_SPY_15m  (193 Tage, 2025-12-18 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)         128  41.4  0.86  -0.91   -1.16   2.47  -0.28  -0.88
+RET  + nur weite IB                          66  43.9  0.93  -0.55   -0.36   1.85   0.72  -1.08
+ORB  Mitte-Stop, 1R (unser Setup 2)         158  45.6  0.72  -3.96   -6.26   6.42  -4.91  -1.35
+ORB  Mitte-Stop, 2R                         158  39.9  0.84   -2.5   -3.94   7.28  -4.43   0.49
+ORB  Mitte-Stop, Halten bis EOD             158  37.3   0.8  -3.19   -5.04   6.46  -3.77  -1.26
+ORB  EOD + nur enge IB                       91  35.2  0.84  -2.08   -1.89   3.55  -0.53  -1.37
+ORB  1R + nur enge IB                        91  46.2  0.76  -2.68   -2.44   3.12  -2.05  -0.39
+ORB  EOD, ohne VWAP-Filter                  159  35.8   0.8  -3.18   -5.06   6.89  -4.17  -0.89
+DT   Dual Thrust n4 k0.5 (je-suis-tm)        49  40.8  0.68  -5.87   -2.87   4.34  -0.14  -2.74
+DT   Dual Thrust n4 k0.3                    115  52.2  0.86  -2.46   -2.83    8.3   2.92  -5.74
+FC   Erste-Kerze-ORB -> EOD (Benchmark)     192  29.2  0.86  -2.13   -4.09  10.96   1.62  -5.71
+
+### NASDAQ_QQQ_15m  (193 Tage, 2025-12-18 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)         124  41.9  1.03   0.26    0.32   4.51   4.16  -3.84
+RET  + nur weite IB                          64  53.1  1.36   3.93    2.51   2.11   4.16  -1.64
+ORB  Mitte-Stop, 1R (unser Setup 2)         156  40.4  0.63  -8.74  -13.63  15.01  -7.36  -6.27
+ORB  Mitte-Stop, 2R                         156  35.3  0.72  -7.11   -11.1   12.8  -7.72  -3.38
+ORB  Mitte-Stop, Halten bis EOD             156  33.3  0.69  -7.98  -12.45  13.49  -6.61  -5.85
+ORB  EOD + nur enge IB                       85  28.2  0.75  -5.33   -4.53   6.63   1.02  -5.55
+ORB  1R + nur enge IB                        85  36.5  0.55   -8.9   -7.56   8.02  -2.08  -5.48
+ORB  EOD, ohne VWAP-Filter                  158  32.9  0.66  -8.88  -14.03  15.07  -9.01  -5.02
+DT   Dual Thrust n4 k0.5 (je-suis-tm)        47  46.8  0.69   -7.7   -3.62    5.5   1.41  -5.03
+DT   Dual Thrust n4 k0.3                    112  52.7   1.3   5.44    6.09   4.17   7.07  -0.98
+FC   Erste-Kerze-ORB -> EOD (Benchmark)     191  34.6  1.01   0.25    0.47  11.19   6.54  -6.07
+
+### AMEX_SPY_30m  (386 Tage, 2025-03-14 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)          88  38.6  0.69  -2.52   -2.22   2.48   -1.4  -0.82
+RET  + nur weite IB                          56  35.7  0.65  -3.61   -2.02   2.28   -1.6  -0.42
+ORB  Mitte-Stop, 1R (unser Setup 2)         290  47.9  0.94   -0.8   -2.32   6.83   0.27  -2.59
+ORB  Mitte-Stop, 2R                         290  41.7  1.03   0.44    1.27   6.13    2.4  -1.13
+ORB  Mitte-Stop, Halten bis EOD             290  40.3  1.02   0.31    0.89   5.21    4.8  -3.91
+ORB  EOD + nur enge IB                      160  35.6  0.85  -2.16   -3.46   6.14   -3.1  -0.36
+ORB  1R + nur enge IB                       160  46.2  0.86  -1.72   -2.75   4.73   -3.6   0.85
+ORB  EOD, ohne VWAP-Filter                  326  32.2  0.73   -4.6  -14.99  18.42  -5.23  -9.76
+DT   Dual Thrust n4 k0.5 (je-suis-tm)       108  41.7  0.94  -1.14   -1.23   4.34   0.81  -2.04
+DT   Dual Thrust n4 k0.3                    254  47.2  0.88  -2.54   -6.45  17.85  -4.28  -2.17
+FC   Erste-Kerze-ORB -> EOD (Benchmark)     383  36.0   0.9   -1.9   -7.27  16.91   1.35  -8.62
+
+### NASDAQ_QQQ_30m  (386 Tage, 2025-03-14 – 2026-09-25, Kosten 0.01%/RT)
+Setup                                         n  Win%    PF   Ø bp  Summe% MaxDD%    H1%    H2%
+RET  IB-25%-Retrace (unser Setup 1)          97  34.0  0.69  -3.62   -3.51   4.21  -0.36  -3.14
+RET  + nur weite IB                          61  34.4  0.72   -3.9   -2.38   3.04  -0.65  -1.73
+ORB  Mitte-Stop, 1R (unser Setup 2)         286  44.4   0.8   -4.2  -12.02  16.18   -1.6 -10.42
+ORB  Mitte-Stop, 2R                         286  39.2  0.83   -3.8  -10.88   14.9  -2.93  -7.95
+ORB  Mitte-Stop, Halten bis EOD             286  38.8  0.88  -2.66    -7.6  12.36   2.23  -9.83
+ORB  EOD + nur enge IB                      164  31.7  0.81  -3.88   -6.36   7.77  -1.61  -4.75
+ORB  1R + nur enge IB                       164  38.4  0.64  -6.86  -11.25  11.59  -4.29  -6.97
+ORB  EOD, ohne VWAP-Filter                  319  34.2  0.69  -7.36  -23.48  27.62  -7.87  -15.6
+DT   Dual Thrust n4 k0.5 (je-suis-tm)        97  47.4  1.03   0.72     0.7    5.5   3.84  -3.14
+DT   Dual Thrust n4 k0.3                    247  47.4  1.11   2.46    6.07  16.25  -0.44    6.5
+FC   Erste-Kerze-ORB -> EOD (Benchmark)     383  40.5  1.05   1.27    4.86  13.76  10.46  -5.61
