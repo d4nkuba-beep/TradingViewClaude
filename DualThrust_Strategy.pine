@@ -1,0 +1,127 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  Dual Thrust Intraday (RTH) – nach je-suis-tm/quant-trading
+//
+//    - Range R = max(HH - LC, HC - LL) der letzten N RTH-Tage
+//      (HH/LL = höchstes Hoch / tiefstes Tief, HC/LC = höchster / tiefster Schluss)
+//    - Obere Linie = RTH-Open + K1 * R  → Stop-Buy
+//    - Untere Linie = RTH-Open - K2 * R → Stop-Sell
+//    - Stop-and-Reverse: wird die Gegenlinie gerissen, dreht die Position
+//    - Alle Positionen werden vor Handelsschluss glattgestellt
+//
+//  Research (research/ANALYSE.md): N=2, K=0.5 war im Bar-Backtest über
+//  TradingView-MCP-Daten (SPY/QQQ 30m, 03/2025–09/2026) der einzige Kandidat
+//  mit stabilem Parameter-Plateau – in den letzten 3 Monaten aber negativ.
+//  Hier im Strategy Tester mit längerer Historie gegenprüfen!
+// ════════════════════════════════════════════════════════════════════════════
+strategy("Dual Thrust Intraday (RTH)", shorttitle="DualThrust",
+     overlay=true, initial_capital=25000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_contract, commission_value=1.25,
+     calc_on_every_tick=false, pyramiding=0)
+
+if barstate.isfirst and not timeframe.isintraday
+    runtime.error("Bitte auf einem Intraday-Chart verwenden (empfohlen: 5–30 Minuten).")
+
+// ─── Sessions (Börsenzeit New York) ─────────────────────────────────────────
+grpS      = "Sessions (New York Zeit)"
+tz        = input.string("America/New_York", "Zeitzone", group=grpS)
+rthSess   = input.session("0930-1600", "Regular Trading Hours (für Range & Open)", group=grpS)
+entrySess = input.session("0930-1545", "Entry-Fenster", group=grpS)
+eodSess   = input.session("1555-1600", "Glattstellen zum Handelsschluss", group=grpS)
+
+// ─── Parameter ──────────────────────────────────────────────────────────────
+grpP       = "Dual Thrust"
+nDays      = input.int(2, "N – Tage für die Range", minval=1, maxval=20, group=grpP)
+k1         = input.float(0.5, "K1 – obere Linie (× Range)", minval=0.05, step=0.05, group=grpP)
+k2         = input.float(0.5, "K2 – untere Linie (× Range)", minval=0.05, step=0.05, group=grpP)
+dirMode    = input.string("Long & Short", "Richtung",
+     options=["Long & Short", "Nur Long", "Nur Short"], group=grpP)
+maxEntries = input.int(0, "Max. Entries pro Tag (0 = unbegrenzt)", minval=0, group=grpP)
+
+// ─── Session-Flags ──────────────────────────────────────────────────────────
+inRth   = not na(time(timeframe.period, rthSess, tz))
+inEntry = not na(time(timeframe.period, entrySess, tz))
+inEod   = not na(time(timeframe.period, eodSess, tz))
+newDay  = inRth and not inRth[1]
+
+// ─── RTH-Tageswerte der letzten N Tage ──────────────────────────────────────
+var array<float> dayHighs  = array.new<float>()
+var array<float> dayLows   = array.new<float>()
+var array<float> dayCloses = array.new<float>()
+var float curHigh  = na
+var float curLow   = na
+var float curClose = na
+var float dayOpen  = na
+var float upper    = na
+var float lower    = na
+var int   entries  = 0
+
+if newDay
+    // abgeschlossenen Vortag archivieren
+    if not na(curHigh)
+        array.push(dayHighs, curHigh)
+        array.push(dayLows, curLow)
+        array.push(dayCloses, curClose)
+        if array.size(dayHighs) > nDays
+            array.shift(dayHighs)
+            array.shift(dayLows)
+            array.shift(dayCloses)
+    curHigh := high
+    curLow  := low
+    dayOpen := open
+    entries := 0
+    if array.size(dayHighs) >= nDays
+        rng = math.max(array.max(dayHighs) - array.min(dayCloses),
+                       array.max(dayCloses) - array.min(dayLows))
+        upper := dayOpen + k1 * rng
+        lower := dayOpen - k2 * rng
+    else
+        upper := na
+        lower := na
+else if inRth
+    curHigh := math.max(curHigh, high)
+    curLow  := math.min(curLow, low)
+
+if inRth
+    curClose := close
+
+// Entries pro Tag zählen (Neueröffnung oder Drehung)
+posChanged = strategy.position_size != strategy.position_size[1]
+if posChanged and strategy.position_size != 0 and
+     math.sign(strategy.position_size) != math.sign(strategy.position_size[1])
+    entries += 1
+
+// ─── Orders ─────────────────────────────────────────────────────────────────
+allowLong  = dirMode != "Nur Short"
+allowShort = dirMode != "Nur Long"
+canTrade   = inEntry and not inEod and not na(upper) and
+     (maxEntries == 0 or entries < maxEntries)
+
+if canTrade and allowLong and strategy.position_size <= 0
+    strategy.entry("DT Long", strategy.long, stop=upper)
+else
+    strategy.cancel("DT Long")
+
+if canTrade and allowShort and strategy.position_size >= 0
+    strategy.entry("DT Short", strategy.short, stop=lower)
+else
+    strategy.cancel("DT Short")
+
+// Nur eine Richtung: Gegenlinie dient als Stop statt als Reversal
+if not allowShort and strategy.position_size > 0
+    strategy.exit("X DT Long", "DT Long", stop=lower)
+if not allowLong and strategy.position_size < 0
+    strategy.exit("X DT Short", "DT Short", stop=upper)
+
+// ─── Glattstellen zum Handelsschluss ────────────────────────────────────────
+if inEod and not inEod[1]
+    strategy.cancel_all()
+if inEod
+    strategy.close_all(comment="EOD Flat")
+
+// ─── Darstellung ────────────────────────────────────────────────────────────
+showLines = inRth and not na(upper)
+plot(showLines ? upper : na, "Obere Linie (Buy-Stop)", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(showLines ? lower : na, "Untere Linie (Sell-Stop)", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(showLines ? dayOpen : na, "RTH-Open", color=color.new(color.gray, 30), style=plot.style_linebr)
