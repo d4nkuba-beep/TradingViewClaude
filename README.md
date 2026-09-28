@@ -61,3 +61,57 @@ Alle Positionen werden um 15:55–16:00 New York glattgestellt.
   anpassen; Slippage im Strategy Tester zusätzlich einstellen.
 - Kein Anlage- oder Finanzberatung; Backtest-Ergebnisse garantieren
   keine zukünftige Performance.
+
+---
+
+# ORB Fakeout Fade GOLD M5 (v1.2)
+
+**Datei:** `ORB_Fakeout_Fade_GOLD_M5.pine` · **Chart:** GC1! / MGC1!, 5 Minuten
+· **Alert-Nachricht:** `{{strategy.order.alert_message}}` (TradersPost)
+
+- **Setup A – Fakeout-Fade:** Ausbruch aus der Opening Range scheitert
+  innerhalb von `k` Kerzen → Einstieg zurück in die Range, SL hinter dem
+  Fakeout-Extrem, Ziel Range-Mitte / Gegenseite / RR.
+- **Setup B – Breakout-Akzeptanz:** `N` Closes außerhalb → Continuation.
+
+## Neu in v1.2
+
+Alle neuen Filter stehen per Default auf **aus** – das Default-Ergebnis
+entspricht v1.1. So kannst du jeden Filter einzeln zuschalten und im
+Strategy Tester gegen die Baseline vergleichen.
+
+| Filter / Option | Wirkung | Begründung |
+|---|---|---|
+| **A: Min. RR** | Kein Fade, wenn Ziel/Risiko < x | Bei „Ziel = Mitte" und großem Fakeout liegt das RR oft bei 0,3–0,5 – der größte Schwachpunkt von v1.1 |
+| **Min. Rückkehr in Range** | Close muss x·Range innerhalb liegen | 1 Tick zurück in der Range ist oft noch kein gescheiterter Ausbruch |
+| **Range-Größe / Tages-ATR** | Nur handeln, wenn OR zwischen min·ATR und max·ATR liegt | Zu enge Ranges = Rauschen, zu weite = Stop zu groß (OR/ATR ist der Standard-Filter für ORB) |
+| **A: VWAP-Seite** | Short-Fade nur mit Close < VWAP (Long umgekehrt) | Bestätigung, dass die Auktion den Ausbruch abgelehnt hat |
+| **B: VWAP-Richtung** | Continuation nur mit dem VWAP | Klassischer ORB+VWAP-Bias |
+| **A: schwacher Ausbruch (Volumen)** | Fade nur, wenn Ausbruchsvolumen ≤ x·Durchschnitt | Ausbrüche ohne Beteiligung scheitern häufiger |
+| **B: nur mit Volumen** | Continuation nur mit Volumen ≥ x·Durchschnitt (z. B. 1,2) | Volumen bestätigt echte Ausbrüche |
+| **A: Liquidity-Sweep** | Fakeout muss Vortageshoch/-tief oder Overnight-Hoch/-Tief nehmen | Stop-Run über ein Key-Level → gefangene Breakout-Trader als Treibstoff |
+| **Handelstage / Sperrdaten** | Wochentage wählen, News-Tage (FOMC, CPI, NFP) sperren | Pine hat keinen Wirtschaftskalender; an News-Tagen laufen Ausbrüche eher durch |
+| **Break-even ab x R** | SL auf Einstieg + 1 Tick | Fakeouts, die funktionieren, drehen meist schnell |
+| **Zeit-Stop nach x Kerzen** | Trade schließen, wenn er nicht läuft | wie oben |
+| **Kontrakte** | Menge wird auch im Alert-JSON übergeben | v1.1 hatte `quantity: 1` fest im JSON |
+| **Gefilterte Signale** | Graues Label „x Grund" am Chart | Man sieht, welcher Filter welchen Trade verhindert |
+| `use_bar_magnifier` | Genauere Fills, wenn SL und TP in derselben Kerze liegen | Nur mit TradingView-Premium aktiv |
+
+## Empfohlene Test-Reihenfolge
+
+1. Baseline v1.2 mit Default-Einstellungen (= v1.1) notieren.
+2. **Min. RR = 1,0** → meist der größte Effekt.
+3. **Range/ATR** (z. B. 0,15–0,60) → schließt Extremtage aus.
+4. **Rückkehr-Tiefe 0,1**, dann **Liquidity-Sweep** und **VWAP** einzeln.
+5. **Break-even 1R** bzw. **Zeit-Stop 6–9 Kerzen**.
+6. Gold-spezifisch: Opening Range auf die COMEX-Eröffnung **08:20–08:35**
+   (Entry-Fenster z. B. 08:35–10:30) legen und gegen 09:30 vergleichen –
+   um 08:20 ist das Volumen in GC typischerweise am höchsten.
+
+Nur Filter behalten, die Profit-Faktor **und** Drawdown verbessern, ohne
+die Trade-Anzahl zu stark zu senken (Overfitting-Gefahr). Gegenprobe
+immer in einem Zeitraum machen, der nicht zum Optimieren genutzt wurde.
+
+**Hinweis TradersPost:** Der Bracket beim Broker ist statisch. Greifen
+Break-even oder Zeit-Stop, sendet die Strategie ein `exit` und der
+Broker wird glattgestellt.

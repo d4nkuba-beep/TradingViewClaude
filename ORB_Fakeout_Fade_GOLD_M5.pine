@@ -1,13 +1,19 @@
 //@version=6
-// ORB Fakeout Fade GOLD M5 v1.1 - NY Open Range / Fakeout
+// ORB Fakeout Fade GOLD M5 v1.2 - NY Open Range / Fakeout
 // Symbol: GC1! / MGC1!  |  Chart-Timeframe: 5 Minuten
 // Setup A: Fakeout-Fade (Ausbruch scheitert -> zurueck in Range)
-// Setup B: Breakout-Akzeptanz (2 Closes ausserhalb -> Continuation)
-strategy("ORB Fakeout Fade GOLD M5 v1.1", overlay = true,
+// Setup B: Breakout-Akzeptanz (N Closes ausserhalb -> Continuation)
+// v1.2: Filter (Min-RR, Range/ATR, VWAP, Volumen, Liquidity-Sweep,
+//       Tage/Sperrdaten, Rueckkehr-Tiefe), Break-even, Zeit-Stop,
+//       Kontraktzahl im Alert. Alle neuen Filter sind per Default AUS
+//       -> Default-Ergebnis = v1.1, Filter einzeln zuschalten und
+//       im Strategy Tester vergleichen.
+strategy("ORB Fakeout Fade GOLD M5 v1.2", overlay = true,
      process_orders_on_close = true,
      default_qty_type = strategy.fixed, default_qty_value = 1,
      commission_type = strategy.commission.cash_per_contract,
      commission_value = 0.82, slippage = 1,
+     use_bar_magnifier = true,
      max_lines_count = 500, max_labels_count = 500)
 
 // ---------- Inputs
@@ -15,12 +21,15 @@ tz      = input.string("America/New_York", "Zeitzone")
 orSess  = input.session("0930-0945", "Opening Range (NY)")
 entSess = input.session("0945-1130", "Entry-Fenster (NY)")
 flatHM  = input.int(1200, "Flat ab (HHMM, NY)")
+qty     = input.int(1, "Kontrakte", 1)
 gA      = "Setup A: Fakeout-Fade"
 useFade = input.bool(true, "Setup A aktiv", group = gA)
 kBars   = input.int(3, "Max Kerzen bis Rueckkehr", 1, group = gA)
 bufT    = input.int(2, "SL-Puffer (Ticks)", 0, group = gA)
 maxExc  = input.float(1.0, "Max Fakeout (x Range)", 0.1,
      step = 0.1, group = gA)
+depth   = input.float(0.0, "Min. Rueckkehr in Range (x Range)", 0.0,
+     step = 0.05, group = gA)
 tpMode  = input.string("Mitte", "Ziel", ["Mitte", "Gegenseite", "RR"],
      group = gA)
 rrA     = input.float(1.5, "RR (nur Ziel=RR)", 0.5, step = 0.25,
@@ -29,26 +38,92 @@ gB      = "Setup B: Breakout-Akzeptanz"
 useCont = input.bool(false, "Setup B aktiv", group = gB)
 nAcc    = input.int(2, "Closes ausserhalb", 1, group = gB)
 rrB     = input.float(1.5, "RR", 0.5, step = 0.25, group = gB)
+gF      = "Filter (Default aus = Verhalten v1.1)"
+minRR   = input.float(0.0, "A: Min. RR (0 = aus)", 0.0, step = 0.1,
+     group = gF)
+useAtr  = input.bool(false, "Range-Groesse / Tages-ATR", group = gF,
+     inline = "atr")
+atrMin  = input.float(0.15, "min", 0.0, step = 0.05, group = gF,
+     inline = "atr")
+atrMax  = input.float(0.60, "max", 0.0, step = 0.05, group = gF,
+     inline = "atr")
+atrLen  = input.int(14, "ATR-Laenge (Tage)", 1, group = gF)
+useVwA  = input.bool(false, "A: Close auf richtiger VWAP-Seite",
+     group = gF)
+useVwB  = input.bool(false, "B: nur in VWAP-Richtung", group = gF)
+useVolA = input.bool(false, "A: nur schwacher Ausbruch (Vol)",
+     group = gF, inline = "va")
+volA    = input.float(1.5, "max x Avg", 0.1, step = 0.1, group = gF,
+     inline = "va")
+useVolB = input.bool(false, "B: nur mit Volumen", group = gF,
+     inline = "vb")
+volB    = input.float(1.2, "min x Avg", 0.1, step = 0.1, group = gF,
+     inline = "vb")
+volLen  = input.int(20, "Volumen-Durchschnitt (Kerzen)", 1, group = gF)
+useSwp  = input.bool(false, "A: Fakeout muss PDH/PDL o. ON-H/L sweepen",
+     group = gF)
+onSess  = input.session("1800-0930", "Overnight-Session (NY)",
+     group = gF)
+days    = input.string("23456", "Handelstage (2=Mo ... 6=Fr)",
+     group = gF)
+noDates = input.string("", "Sperrdaten yyyy-MM-dd,... (FOMC/CPI/NFP)",
+     group = gF)
+gM      = "Trade-Management"
+beR     = input.float(0.0, "SL auf Einstieg ab x R (0 = aus)", 0.0,
+     step = 0.25, group = gM)
+maxBars = input.int(0, "Zeit-Stop nach x Kerzen (0 = aus)", 0,
+     group = gM)
+showBlk = input.bool(true, "Gefilterte Signale markieren", group = gM)
 gT      = "TradersPost"
 tpTick  = input.string("{{ticker}}", "Ticker im Alert", group = gT)
 
 // ---------- Zeit
 inOR   = not na(time(timeframe.period, orSess, tz))
 inEnt  = not na(time(timeframe.period, entSess, tz))
+inON   = not na(time(timeframe.period, onSess, tz))
 cHM    = hour(time_close, tz) * 100 + minute(time_close, tz)
 orNew  = inOR and not inOR[1]
 orEnd  = not inOR and inOR[1]
+dayOk  = str.contains(days, str.tostring(dayofweek(time, tz))) and
+     (noDates == "" or
+     not str.contains(noDates, str.format_time(time, "yyyy-MM-dd", tz)))
+
+// ---------- Kontext-Daten (ohne Repaint: abgeschlossene Vortage)
+atrD = request.security(syminfo.tickerid, "D", ta.atr(atrLen)[1],
+     lookahead = barmerge.lookahead_on)
+pdh  = request.security(syminfo.tickerid, "D", high[1],
+     lookahead = barmerge.lookahead_on)
+pdl  = request.security(syminfo.tickerid, "D", low[1],
+     lookahead = barmerge.lookahead_on)
+vw     = ta.vwap(hlc3)
+volAvg = ta.sma(volume, volLen)[1]
 
 // ---------- State
 var float orH    = na
 var float orL    = na
+var float onH    = na
+var float onL    = na
 var bool  active = false  // Range steht, Tag laeuft
 var int   brk    = 0      // 0 kein, 1 up, -1 dn, 9 tot
 var int   brkBar = na
 var float ext    = na
+var float bVol   = na     // max. Volumen waehrend des Ausbruchs
 var bool  traded = false
 var int   upC    = 0
 var int   dnC    = 0
+var string eId   = ""     // offener Trade (fuer Management)
+var float ePx    = na
+var float eSL    = na
+var float eTP    = na
+var int   eBar   = na
+var bool  beDone = false
+
+if inON and not inON[1]
+    onH := high
+    onL := low
+else if inON
+    onH := math.max(onH, high)
+    onL := math.min(onL, low)
 
 if orNew
     orH    := high
@@ -57,6 +132,7 @@ if orNew
     brk    := 0
     brkBar := na
     ext    := na
+    bVol   := na
     traded := false
     upC    := 0
     dnC    := 0
@@ -69,15 +145,25 @@ if orEnd
 rng = orH - orL
 mid = (orH + orL) / 2
 tk  = syminfo.mintick
+sizeOk = not useAtr or
+     (atrD > 0 and rng >= atrMin * atrD and rng <= atrMax * atrD)
 f(x) => str.tostring(x, format.mintick)
 msgIn(act, sl, tp) =>
     '{"ticker":"' + tpTick + '","action":"' + act +
-     '","quantity":1,"stopLoss":{"type":"stop","stopPrice":' +
+     '","quantity":' + str.tostring(qty) +
+     ',"stopLoss":{"type":"stop","stopPrice":' +
      f(sl) + '},"takeProfit":{"limitPrice":' + f(tp) + '}}'
 msgX = '{"ticker":"' + tpTick + '","action":"exit"}'
 
 bool sigS = false
 bool sigL = false
+
+// Einstieg + Bracket setzen, State fuer Management merken
+enter(id, isLong, sl, tp) =>
+    strategy.entry(id, isLong ? strategy.long : strategy.short,
+         qty = qty, alert_message = msgIn(isLong ? "buy" : "sell", sl, tp))
+    strategy.exit("x" + id, id, stop = sl, limit = tp,
+         alert_message = msgX)
 
 // ---------- Setup A: Fakeout-Fade
 if active and not traded and brk != 9 and rng > 0
@@ -88,43 +174,58 @@ if active and not traded and brk != 9 and rng > 0
             brk := 1
             brkBar := bar_index
             ext := high
+            bVol := volume
         else if low < orL
             brk := -1
             brkBar := bar_index
             ext := low
+            bVol := volume
     else if brk == 1
         ext := math.max(ext, high)
+        bVol := math.max(bVol, volume)
     else if brk == -1
         ext := math.min(ext, low)
-    failU = brk == 1 and close < orH
-    failD = brk == -1 and close > orL
+        bVol := math.max(bVol, volume)
+    failU = brk == 1 and close < orH - depth * rng
+    failD = brk == -1 and close > orL + depth * rng
     if failU or failD
-        exc   = failU ? ext - orH : orL - ext
-        valid = useFade and inEnt and exc <= maxExc * rng
-        okS   = tpMode == "Mitte" ? close > mid : close > orL
-        okL   = tpMode == "Mitte" ? close < mid : close < orH
-        if valid and failU and okS
-            sl = ext + bufT * tk
-            tp = tpMode == "Mitte" ? mid :
-                 tpMode == "Gegenseite" ? orL :
-                 close - rrA * (sl - close)
-            strategy.entry("FadeS", strategy.short,
-                 alert_message = msgIn("sell", sl, tp))
-            strategy.exit("xFS", "FadeS", stop = sl, limit = tp,
-                 alert_message = msgX)
+        exc = failU ? ext - orH : orL - ext
+        sl  = failU ? ext + bufT * tk : ext - bufT * tk
+        tp  = tpMode == "Mitte" ? mid :
+             tpMode == "Gegenseite" ? (failU ? orL : orH) :
+             close + rrA * (close - sl)
+        rr  = math.abs(tp - close) / math.abs(close - sl)
+        okT = failU ? (tpMode == "Mitte" ? close > mid : close > orL) :
+             (tpMode == "Mitte" ? close < mid : close < orH)
+        swU = (pdh > orH and ext > pdh) or (onH > orH and ext > onH)
+        swD = (pdl < orL and ext < pdl) or (onL < orL and ext < onL)
+        why = (exc <= maxExc * rng ? "" : "Fakeout>max ") +
+             (okT ? "" : "Ziel ") +
+             (minRR <= 0 or rr >= minRR ? "" : "RR ") +
+             (sizeOk ? "" : "ATR ") +
+             (dayOk ? "" : "Tag ") +
+             (not useVwA or (failU ? close < vw : close > vw) ?
+             "" : "VWAP ") +
+             (not useVolA or bVol <= volA * volAvg ? "" : "Vol ") +
+             (not useSwp or (failU ? swU : swD) ? "" : "Sweep ")
+        if useFade and inEnt and why == ""
+            id = failU ? "FadeS" : "FadeL"
+            enter(id, failD, sl, tp)
+            eId    := id
+            ePx    := close
+            eSL    := sl
+            eTP    := tp
+            eBar   := bar_index
+            beDone := false
             traded := true
-            sigS := true
-        else if valid and failD and okL
-            sl = ext - bufT * tk
-            tp = tpMode == "Mitte" ? mid :
-                 tpMode == "Gegenseite" ? orH :
-                 close + rrA * (close - sl)
-            strategy.entry("FadeL", strategy.long,
-                 alert_message = msgIn("buy", sl, tp))
-            strategy.exit("xFL", "FadeL", stop = sl, limit = tp,
-                 alert_message = msgX)
-            traded := true
-            sigL := true
+            sigS   := failU
+            sigL   := failD
+        else if useFade and inEnt and showBlk
+            label.new(bar_index, failU ? high : low, "x " + why,
+                 style = failU ? label.style_label_down :
+                 label.style_label_up, size = size.tiny,
+                 color = color.new(color.gray, 40),
+                 textcolor = color.white)
         brk := 9
     else if brk != 0 and bar_index - brkBar >= kBars
         brk := 9  // Ausbruch akzeptiert -> kein Fade heute
@@ -133,25 +234,43 @@ if active and not traded and brk != 9 and rng > 0
 if active
     upC := close > orH ? upC + 1 : 0
     dnC := close < orL ? dnC + 1 : 0
-if useCont and active and inEnt and not traded and rng > 0
-    if upC >= nAcc
-        sl = orH - 0.25 * rng
+if useCont and active and inEnt and not traded and rng > 0 and
+     sizeOk and dayOk
+    volOk = not useVolB or volume >= volB * volAvg
+    goL = upC >= nAcc and volOk and (not useVwB or close > vw)
+    goS = dnC >= nAcc and volOk and (not useVwB or close < vw)
+    if goL or goS
+        sl = goL ? orH - 0.25 * rng : orL + 0.25 * rng
         tp = close + rrB * (close - sl)
-        strategy.entry("AccL", strategy.long,
-             alert_message = msgIn("buy", sl, tp))
-        strategy.exit("xAL", "AccL", stop = sl, limit = tp,
-             alert_message = msgX)
+        id = goL ? "AccL" : "AccS"
+        enter(id, goL, sl, tp)
+        eId    := id
+        ePx    := close
+        eSL    := sl
+        eTP    := tp
+        eBar   := bar_index
+        beDone := false
         traded := true
-        sigL := true
-    else if dnC >= nAcc
-        sl = orL + 0.25 * rng
-        tp = close - rrB * (sl - close)
-        strategy.entry("AccS", strategy.short,
-             alert_message = msgIn("sell", sl, tp))
-        strategy.exit("xAS", "AccS", stop = sl, limit = tp,
-             alert_message = msgX)
-        traded := true
-        sigS := true
+        sigL   := goL
+        sigS   := goS
+
+// ---------- Trade-Management (Break-even, Zeit-Stop)
+// Hinweis: Der Broker-Bracket bei TradersPost bleibt statisch. Greift
+// BE/Zeit-Stop, feuert die Strategie ein "exit" -> Broker wird flat.
+if strategy.position_size != 0 and eId != "" and bar_index > eBar
+    isL  = strategy.position_size > 0
+    risk = math.abs(ePx - eSL)
+    if beR > 0 and not beDone and risk > 0
+        hit = isL ? high >= ePx + beR * risk : low <= ePx - beR * risk
+        if hit
+            eSL    := isL ? ePx + tk : ePx - tk
+            beDone := true
+            strategy.exit("x" + eId, eId, stop = eSL, limit = eTP,
+                 alert_message = msgX)
+    if maxBars > 0 and bar_index - eBar >= maxBars
+        strategy.close(eId, comment = "Zeit", alert_message = msgX)
+if strategy.position_size == 0 and bar_index > eBar
+    eId := ""
 
 // ---------- Flat zum Zeitlimit
 if active and cHM >= flatHM
@@ -166,6 +285,16 @@ plot(show ? orL : na, "Range Low", color.new(color.green, 0), 2,
      plot.style_linebr)
 plot(show ? mid : na, "Range Mitte", color.new(color.gray, 30), 1,
      plot.style_linebr)
+plot(show and (useVwA or useVwB) ? vw : na, "VWAP",
+     color.new(color.purple, 0), 1, plot.style_linebr)
+plot(show and useSwp ? pdh : na, "PDH", color.new(color.orange, 40), 1,
+     plot.style_linebr)
+plot(show and useSwp ? pdl : na, "PDL", color.new(color.orange, 40), 1,
+     plot.style_linebr)
+plot(show and useSwp ? onH : na, "ON High", color.new(color.teal, 40),
+     1, plot.style_linebr)
+plot(show and useSwp ? onL : na, "ON Low", color.new(color.teal, 40),
+     1, plot.style_linebr)
 bgcolor(inOR ? color.new(color.blue, 90) : na, title = "OR-Fenster")
 plotshape(sigS, "Short", shape.triangledown, location.abovebar,
      color.red, size = size.small)
