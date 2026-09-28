@@ -61,3 +61,82 @@ Alle Positionen werden um 15:55–16:00 New York glattgestellt.
   anpassen; Slippage im Strategy Tester zusätzlich einstellen.
 - Kein Anlage- oder Finanzberatung; Backtest-Ergebnisse garantieren
   keine zukünftige Performance.
+
+---
+
+# ORB Fakeout Fade GOLD M5 (v1.4)
+
+**v1.4:** Da nur Gold gehandelt wird, stehen die Defaults wieder auf dem
+v1.1-Verhalten (Ziel `Mitte`, RR 1,5, VWAP-Filter aus) – auf GC 5m/15m
+war das im Test besser (+4,2 R / +7,8 R vs. +1,5 R / +3,5 R). Die
+v1.3-Variante unten bleibt als Option (`Mitte/RR max` + VWAP an).
+
+**Schlanke Gold-Version:** `ORB_Fade_GC_M5_v1.1_k2.pine` – v1.1 mit
+„Max Kerzen bis Rückkehr" = 2 (auf GC 5m +5,2 R statt +4,2 R) und dem
+Input **„Kontrakte pro Trade"**, der für Backtest und Webhook-`quantity`
+gilt.
+
+**Datei:** `ORB_Fakeout_Fade_GOLD_M5.pine` · **Chart:** GC1! / MGC1!, 5 Minuten
+· **Alert-Nachricht:** `{{strategy.order.alert_message}}` (TradersPost)
+
+- **Setup A – Fakeout-Fade:** Ausbruch aus der Opening Range scheitert
+  innerhalb von `k` Kerzen → Einstieg zurück in die Range, SL hinter dem
+  Fakeout-Extrem.
+- **Setup B – Breakout-Akzeptanz:** `N` Closes außerhalb → Continuation
+  (per Default aus – verlor im Backtest auf allen Datensätzen).
+
+## v1.3 – Defaults aus dem Backtest
+
+Die Logik wurde in Python 1:1 nachgebaut (`research/orb_fakeout_backtest.py`:
+Entry auf dem Close, Stop/Limit intrabar mit TradingView-Pfadregel,
+1 Tick Slippage) und auf TradingView-Daten getestet: **GC, SI, PL, HG**,
+jeweils **5 min** (02.–25.09.2026, ~18 Handelstage) und **15 min**
+(03.08.–25.09.2026). Metalle ohne Gold dienen als Robustheits-Check.
+
+| Variante | Trades | Summe R | Datensätze positiv | Gold (5m / 15m) |
+|---|---|---|---|---|
+| v1.1 (Ziel Mitte, keine Filter) | 115 | +3,2 R | 4 / 8 | +4,2 R / +7,8 R |
+| **v1.3 (Ziel = weiteres von Mitte / 1R, VWAP-Bestätigung)** | 65 | **+11,7 R** | **8 / 8** | +1,5 R / +3,5 R |
+
+Wichtige Ergebnisse (je Filter einzeln gegen v1.1):
+
+| Änderung | Effekt |
+|---|---|
+| Ziel **1R** statt Mitte | +13,9 R, 6/8 besser – „Mitte" bringt oft nur 0,2–0,4 R |
+| Ziel **weiteres von Mitte / 1R** + **VWAP** | als einzige Kombination auf allen 8 Datensätzen positiv → neuer Default |
+| VWAP-Bestätigung | halbiert die Trades, ~6× höheres Ø-R pro Trade |
+| **Min-RR-Filter** | **schadet** (−4 bis −7 R) – filtert gerade die Trades mit hoher Trefferquote; bleibt aus |
+| Setup B (Continuation) | −19 R, 0/8 besser → aus |
+| Ziel Gegenseite | −19 R |
+| Opening Range 08:20 (COMEX) | schlechter als 09:30 |
+| Rückkehr-Tiefe, Max-Fakeout 0,5, Zeit-Stop, Liquidity-Sweep | uneinheitlich bzw. zu wenige Trades |
+| Break-even 0,5R / 1R | etwa neutral |
+| Ohne Montag (`3456`) | besser (+15,8 R, 8/8) – aber nur ~4–10 Montage je Datensatz, daher nicht Default |
+
+**Ehrlicher Hinweis:** Auf *Gold allein* war v1.1 in diesem kurzen Zeitraum
+besser (10 bzw. 13 Trades). Über alle Metalle hatte v1.1 aber praktisch
+keinen Vorteil (+0,03 R/Trade), v1.3 dagegen +0,18 R/Trade und kein
+negativer Datensatz. Das ist das verlässlichere Signal. Die Stichprobe
+ist trotzdem klein – vor Live-Einsatz im TradingView Strategy Tester
+über 6–12 Monate (Deep Backtesting) prüfen.
+
+## Filter und Optionen
+
+| Filter / Option | Wirkung |
+|---|---|
+| **Ziel** | `Mitte` (Default), `Mitte/RR max` (v1.3), `Gegenseite`, `RR` |
+| **A: VWAP-Seite** (Default aus, v1.3: an) | Short-Fade nur mit Close < VWAP, Long nur mit Close > VWAP |
+| A: Min. RR | Kein Fade, wenn Ziel/Risiko < x (laut Backtest nicht empfohlen) |
+| Min. Rückkehr in Range | Close muss x·Range innerhalb liegen |
+| Range-Größe / Tages-ATR | Nur handeln, wenn OR zwischen min·ATR und max·ATR |
+| B: VWAP-Richtung / Volumen | Filter für Setup B |
+| A: schwacher Ausbruch (Volumen) | Fade nur bei Ausbruchsvolumen ≤ x·Durchschnitt |
+| A: Liquidity-Sweep | Fakeout muss PDH/PDL oder Overnight-High/-Low nehmen |
+| Handelstage / Sperrdaten | Wochentage (Pine: 2=Mo … 6=Fr) und News-Tage (FOMC, CPI, NFP) |
+| Break-even ab x R / Zeit-Stop | Trade-Management |
+| Kontrakte | Menge auch im Alert-JSON |
+| Gefilterte Signale | Graues Label „x Grund" am Chart |
+
+**Hinweis TradersPost:** Der Bracket beim Broker ist statisch. Greifen
+Break-even oder Zeit-Stop, sendet die Strategie ein `exit` und der
+Broker wird glattgestellt.

@@ -1,0 +1,188 @@
+//@version=6
+// ORB Fade GC M5 v1.1 k2 Mitte Qty - NY Open Range / Fakeout
+// Symbol: GC1! / MGC1!  |  Chart-Timeframe: 5 Minuten
+// Parameter: OR 09:30-09:45, Entry 09:45-11:30, Flat 12:00,
+//            k=2 Kerzen bis Rueckkehr, Ziel Range-Mitte, SL-Puffer 2 Ticks
+// Kontrakte: im Einstellungsfenster -> gilt fuer Backtest UND Webhook
+// Setup A: Fakeout-Fade (Ausbruch scheitert -> zurueck in Range)
+// Setup B: Breakout-Akzeptanz (aus - verlor im Backtest)
+strategy("ORB Fade GC M5 v1.1 k2 Mitte Qty", shorttitle = "ORB-GC-M5-k2",
+     overlay = true,
+     process_orders_on_close = true,
+     default_qty_type = strategy.fixed, default_qty_value = 1,
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 0.82, slippage = 1,
+     max_lines_count = 500, max_labels_count = 500)
+
+// ---------- Inputs
+tz      = input.string("America/New_York", "Zeitzone")
+orSess  = input.session("0930-0945", "Opening Range (NY)")
+entSess = input.session("0945-1130", "Entry-Fenster (NY)")
+flatHM  = input.int(1200, "Flat ab (HHMM, NY)")
+qty     = input.int(1, "Kontrakte pro Trade (Backtest + Webhook)", 1)
+gA      = "Setup A: Fakeout-Fade"
+useFade = input.bool(true, "Setup A aktiv", group = gA)
+kBars   = input.int(2, "Max Kerzen bis Rueckkehr", 1, group = gA)
+bufT    = input.int(2, "SL-Puffer (Ticks)", 0, group = gA)
+maxExc  = input.float(1.0, "Max Fakeout (x Range)", 0.1,
+     step = 0.1, group = gA)
+tpMode  = input.string("Mitte", "Ziel", ["Mitte", "Gegenseite", "RR"],
+     group = gA)
+rrA     = input.float(1.5, "RR (nur Ziel=RR)", 0.5, step = 0.25,
+     group = gA)
+gB      = "Setup B: Breakout-Akzeptanz"
+useCont = input.bool(false, "Setup B aktiv", group = gB)
+nAcc    = input.int(2, "Closes ausserhalb", 1, group = gB)
+rrB     = input.float(1.5, "RR", 0.5, step = 0.25, group = gB)
+gT      = "TradersPost"
+tpTick  = input.string("{{ticker}}", "Ticker im Alert", group = gT)
+
+// ---------- Zeit
+inOR   = not na(time(timeframe.period, orSess, tz))
+inEnt  = not na(time(timeframe.period, entSess, tz))
+cHM    = hour(time_close, tz) * 100 + minute(time_close, tz)
+orNew  = inOR and not inOR[1]
+orEnd  = not inOR and inOR[1]
+
+// ---------- State
+var float orH    = na
+var float orL    = na
+var bool  active = false  // Range steht, Tag laeuft
+var int   brk    = 0      // 0 kein, 1 up, -1 dn, 9 tot
+var int   brkBar = na
+var float ext    = na
+var bool  traded = false
+var int   upC    = 0
+var int   dnC    = 0
+
+if orNew
+    orH    := high
+    orL    := low
+    active := false
+    brk    := 0
+    brkBar := na
+    ext    := na
+    traded := false
+    upC    := 0
+    dnC    := 0
+else if inOR
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+if orEnd
+    active := true
+
+rng = orH - orL
+mid = (orH + orL) / 2
+tk  = syminfo.mintick
+f(x) => str.tostring(x, format.mintick)
+msgIn(act, sl, tp) =>
+    '{"ticker":"' + tpTick + '","action":"' + act +
+     '","quantity":' + str.tostring(qty) +
+     ',"stopLoss":{"type":"stop","stopPrice":' +
+     f(sl) + '},"takeProfit":{"limitPrice":' + f(tp) + '}}'
+msgX = '{"ticker":"' + tpTick + '","action":"exit"}'
+
+bool sigS = false
+bool sigL = false
+
+// ---------- Setup A: Fakeout-Fade
+if active and not traded and brk != 9 and rng > 0
+    if brk == 0
+        if high > orH and low < orL
+            brk := 9
+        else if high > orH
+            brk := 1
+            brkBar := bar_index
+            ext := high
+        else if low < orL
+            brk := -1
+            brkBar := bar_index
+            ext := low
+    else if brk == 1
+        ext := math.max(ext, high)
+    else if brk == -1
+        ext := math.min(ext, low)
+    failU = brk == 1 and close < orH
+    failD = brk == -1 and close > orL
+    if failU or failD
+        exc   = failU ? ext - orH : orL - ext
+        valid = useFade and inEnt and exc <= maxExc * rng
+        okS   = tpMode == "Mitte" ? close > mid : close > orL
+        okL   = tpMode == "Mitte" ? close < mid : close < orH
+        if valid and failU and okS
+            sl = ext + bufT * tk
+            tp = tpMode == "Mitte" ? mid :
+                 tpMode == "Gegenseite" ? orL :
+                 close - rrA * (sl - close)
+            strategy.entry("FadeS", strategy.short, qty = qty,
+                 alert_message = msgIn("sell", sl, tp))
+            strategy.exit("xFS", "FadeS", stop = sl, limit = tp,
+                 alert_message = msgX)
+            traded := true
+            sigS := true
+        else if valid and failD and okL
+            sl = ext - bufT * tk
+            tp = tpMode == "Mitte" ? mid :
+                 tpMode == "Gegenseite" ? orH :
+                 close + rrA * (close - sl)
+            strategy.entry("FadeL", strategy.long, qty = qty,
+                 alert_message = msgIn("buy", sl, tp))
+            strategy.exit("xFL", "FadeL", stop = sl, limit = tp,
+                 alert_message = msgX)
+            traded := true
+            sigL := true
+        brk := 9
+    else if brk != 0 and bar_index - brkBar >= kBars
+        brk := 9  // Ausbruch akzeptiert -> kein Fade heute
+
+// ---------- Setup B: Breakout-Akzeptanz (Continuation)
+if active
+    upC := close > orH ? upC + 1 : 0
+    dnC := close < orL ? dnC + 1 : 0
+if useCont and active and inEnt and not traded and rng > 0
+    if upC >= nAcc
+        sl = orH - 0.25 * rng
+        tp = close + rrB * (close - sl)
+        strategy.entry("AccL", strategy.long, qty = qty,
+             alert_message = msgIn("buy", sl, tp))
+        strategy.exit("xAL", "AccL", stop = sl, limit = tp,
+             alert_message = msgX)
+        traded := true
+        sigL := true
+    else if dnC >= nAcc
+        sl = orL + 0.25 * rng
+        tp = close - rrB * (sl - close)
+        strategy.entry("AccS", strategy.short, qty = qty,
+             alert_message = msgIn("sell", sl, tp))
+        strategy.exit("xAS", "AccS", stop = sl, limit = tp,
+             alert_message = msgX)
+        traded := true
+        sigS := true
+
+// ---------- Flat zum Zeitlimit
+if active and cHM >= flatHM
+    strategy.close_all("EOD", alert_message = msgX)
+    active := false
+
+// ---------- Zeichnen
+show = inOR or active
+plot(show ? orH : na, "Range High", color.new(color.red, 0), 2,
+     plot.style_linebr)
+plot(show ? orL : na, "Range Low", color.new(color.green, 0), 2,
+     plot.style_linebr)
+plot(show ? mid : na, "Range Mitte", color.new(color.gray, 30), 1,
+     plot.style_linebr)
+bgcolor(inOR ? color.new(color.blue, 90) : na, title = "OR-Fenster")
+plotshape(sigS, "Short", shape.triangledown, location.abovebar,
+     color.red, size = size.small)
+plotshape(sigL, "Long", shape.triangleup, location.belowbar,
+     color.green, size = size.small)
+
+// ---------- Timeframe-Check
+var label tfWarn = na
+if barstate.islast and timeframe.period != "5"
+    label.delete(tfWarn)
+    tfWarn := label.new(bar_index, high, "Achtung: fuer M5 gebaut",
+         color = color.orange, textcolor = color.white)
+
+// Alert: Nachricht = {{strategy.order.alert_message}}
