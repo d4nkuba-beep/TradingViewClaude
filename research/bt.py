@@ -67,7 +67,7 @@ def run(df, strat, tf_min, **kw):
         d["vwap"] = day_vwap(d)
         ib_end = kw.get("ib_end", 1030)
         ib = d[d.hm < ib_end]
-        if len(ib) == 0 or len(d) < 10:
+        if len(ib) == 0 or len(d) < kw.get("min_bars", 10):
             continue
         ibh, ibl = ib.h.max(), ib.l.min()
         rng = ibh - ibl
@@ -175,16 +175,20 @@ def s_orb(d, day, ibh, ibl, rng, ib_med, daily, tf, tp_r=1.0, stop_mode="mid", v
     return None
 
 
-def s_dual_thrust(d, day, ibh, ibl, rng, ib_med, daily, tf, n=4, k1=0.5, k2=0.5, **_):
+def s_dual_thrust(d, day, ibh, ibl, rng, ib_med, daily, tf, n=4, k1=0.5, k2=0.5, direction="both", start_bar=0, **_):
     """je-suis-tm Dual Thrust: trigger = open +/- k*max(HH-LC, HC-LL) of last n days,
-    stop-and-reverse on the opposite trigger, flat at EOD."""
+    stop-and-reverse on the opposite trigger, flat at EOD.
+    direction="long"/"short": only one side; the opposite trigger is then a plain stop."""
+    if direction != "both":
+        return _dual_thrust_one_side(d, day, daily, n, k1, k2, 1 if direction == "long" else -1,
+                                     start_bar)
     if len(daily) < n:
         return None
     w = pd.DataFrame(daily[-n:])
     R = max(w.h.max() - w.c.min(), w.c.max() - w.l.min())
     up, dn = d.o[0] + k1 * R, d.o[0] - k2 * R
     trades, pos = [], None
-    for j in range(len(d)):
+    for j in range(start_bar, len(d)):
         h, l = d.h[j], d.l[j]
         if pos is None:
             if h >= up and l <= dn:
@@ -199,6 +203,33 @@ def s_dual_thrust(d, day, ibh, ibl, rng, ib_med, daily, tf, n=4, k1=0.5, k2=0.5,
         elif pos.side < 0 and h >= up:
             pos.exit = max(up, d.o[j]); trades.append(pos)
             pos = Trade(day, 1, pos.exit, None, None, "DT")
+        if d.hm[j] >= 1555 or j == len(d) - 1:
+            break
+    if pos:
+        pos.exit = d.c.iloc[-1]; trades.append(pos)
+    return trades
+
+
+def _dual_thrust_one_side(d, day, daily, n, k1, k2, side, start_bar=0):
+    if len(daily) < n:
+        return None
+    w = pd.DataFrame(daily[-n:])
+    R = max(w.h.max() - w.c.min(), w.c.max() - w.l.min())
+    up, dn = d.o[0] + k1 * R, d.o[0] - k2 * R
+    trades, pos = [], None
+    for j in range(start_bar, len(d)):
+        h, l, o = d.h[j], d.l[j], d.o[j]
+        if pos is None:
+            if side > 0 and h >= up:
+                pos = Trade(day, 1, max(up, o), None, None, "DT")
+                pos.stop = dn
+            elif side < 0 and l <= dn:
+                pos = Trade(day, -1, min(dn, o), None, None, "DT")
+                pos.stop = up
+        elif side > 0 and l <= dn:
+            pos.exit = min(dn, o); trades.append(pos); pos = None
+        elif side < 0 and h >= up:
+            pos.exit = max(up, o); trades.append(pos); pos = None
         if d.hm[j] >= 1555 or j == len(d) - 1:
             break
     if pos:

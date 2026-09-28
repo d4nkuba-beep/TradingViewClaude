@@ -11,11 +11,11 @@ Stand: 28.09.2026 · Daten: TradingView-MCP (`mcp-tv-get-ohlcv`), nur RTH, 15 Mi
    nicht profitabel** – über alle Timeframes und beide Symbole PF < 1
    (Ausnahme: Retrace auf QQQ 15m knapp positiv, zerfällt aber in der zweiten Hälfte).
 3. **Einziger ernsthafter Kandidat: Dual Thrust (aus je-suis-tm/quant-trading)** mit
-   N=2, K=0.5: PF 1,34/1,35 auf SPY/QQQ 30m über 18 Monate, überlebt doppelte Kosten
-   und das Herausnehmen des Crashs vom April 2025. **Aber:** in den letzten 3 Monaten
-   (5m-Daten) negativ, und 18 Monate sind zu kurz. → Als Pine-Strategie
-   (`DualThrust_Strategy.pine`) im Strategy Tester mit mehr Historie und auf ES/NQ prüfen,
-   **bevor** echtes Geld fließt.
+   N=2, K=0.5. Runde 2 (siehe unten) mit ~3 Jahren 1h-Daten und 8 Märkten:
+   **auf QQQ in jedem Jahr 2023–2026 positiv** (PF 1,38, 2024 = echter Out-of-Sample),
+   ebenso XLK/SMH 2024–25; auf DIA/IWM **keine** Edge. Der Gewinn kommt überwiegend
+   von der **Short-Seite** (QQQ nur Short: PF 1,53, max. DD 5,4 %). Die letzten 3 Monate
+   sind leicht negativ. → Kandidat für Paper-Trading auf QQQ/NQ, 5m-Chart, nicht mehr.
 
 ## Die 5 Repos – was taugt, was lernen wir
 
@@ -80,14 +80,66 @@ Vollständige Tabellen inkl. Trefferquote, Drawdown, IB-Größenfilter und Varia
 **Bewertung:** Plausible, aber unbewiesene Edge – vor allem in volatilen Trendphasen. Nicht "profitabel"
 im Sinne von einsatzbereit.
 
+## Runde 2 – längere Historie, mehr Märkte (1h-Daten 11/2023–09/2026)
+
+Neue Skripte: `run_dt_years.py`, `run_dt_short.py`, `run_dt_checks.py`;
+Ergebnisse in `results/dual_thrust_oos.txt`, `results/dual_thrust_short.txt`, `results/dual_thrust_checks.txt`.
+
+### Dual Thrust N2/K0.5 (Stop-and-Reverse) je Jahr
+
+| Markt | Gesamt | PF | Max-DD | 2023 (6 Wo.) | 2024 | 2025 | 2026 YTD |
+|---|---|---|---|---|---|---|---|
+| **QQQ** | **+35,2 %** | **1,38** | 7,1 % | +0,9 | **+11,2** | +15,8 | **+7,3** |
+| XLK | +40,6 % | 1,35 | 9,7 % | −0,7 | +19,8 | +18,8 | +2,7 |
+| SMH | +42,7 % | 1,25 | 17,1 % | +2,3 | +23,3 | +18,0 | −0,9 |
+| SPY | +19,7 % | 1,26 | 6,5 % | +2,4 | −1,1 | +17,1 | +1,3 |
+| DIA | +1,5 % | 1,02 | 10,7 % | +1,8 | −5,2 | +7,2 | −2,2 |
+| IWM | −3,4 % | 0,98 | 14,3 % | +0,4 | −0,4 | +7,0 | −10,3 |
+
+- **Tech/Nasdaq trägt, Dow/Small Caps nicht.** SPY lebt fast nur von 2025 (Zoll-Crash).
+- ES1!/NQ1! liefern per MCP nur ~10 Monate 1h und die Futures-Stundenkerzen beginnen um :00
+  (RTH-Open 9:30 fehlt) → nicht vergleichbar, nur zur Vollständigkeit in `dual_thrust_oos.txt`.
+
+### Die Edge sitzt auf der Short-Seite
+
+| Markt | Long-Anteil | Short-Anteil | Nur Short N2/K0.5 | je Jahr 2023 / 24 / 25 / 26 |
+|---|---|---|---|---|
+| QQQ | +6,4 % (PF 1,15) | +28,8 % (PF 1,57) | **+27,4 %, PF 1,53, DD 5,4 %** | +1,4 / +11,9 / +10,8 / **+3,3** |
+| XLK | +7,2 % (PF 1,14) | +33,4 % (PF 1,53) | +31,8 %, PF 1,49, DD 6,8 % | +0,7 / +15,4 / +16,0 / −0,3 |
+| SMH | +1,0 % (PF 1,01) | +41,7 % (PF 1,44) | +39,3 %, PF 1,40, DD 14,5 % | +1,8 / +20,2 / +16,0 / +1,3 |
+| SPY | +5,3 % (PF 1,16) | +14,4 % (PF 1,34) | +14,5 %, PF 1,34, DD 5,3 % | +1,2 / +3,1 / +10,4 / −0,3 |
+
+Im Bullenmarkt (QQQ Buy&Hold +94 %) verdient die Strategie vor allem an **Intraday-Abverkäufen,
+die bis zum Schluss durchlaufen**. Das ist kein verstecktes Long-Beta – eher ein Hedge-artiges
+Profil, das gut zu einem Long-Depot passt.
+
+### Plausibilitätschecks
+
+- **N=1 sieht auf 1h spektakulär aus (QQQ +80 %), ist aber ein Artefakt:** Auf 15m-Daten desselben
+  Zeitraums schrumpft es von +16,6 % auf +1,8 %. Grobe Kerzen verschlucken die Whipsaws um die
+  enge Vortagesrange. **Verworfen.**
+- **N=2/K0.5 ist auflösungsstabil:** 5m ≈ 1h, 15m ≈ 1h, 30m ≈ 1h (Abweichung < 2 Prozentpunkte).
+- **Parameter:** K 0,4–0,6 bei N=2 überall positiv auf QQQ/XLK/SMH; N=3 deutlich schwächer.
+  N=2 ist also ein Grat, keine breite Hochebene – ein echtes Risiko.
+- **Erste RTH-Kerze** (Pine kann dort noch nicht handeln): auf 5m ohne Effekt, auf 30m kostet sie
+  ca. 15–40 % des Ergebnisses → **Pine-Strategie auf 5m-Chart laufen lassen.**
+
+### Bewertung
+
+Verwertbar ist **Dual Thrust N2/K0.5 auf QQQ (bzw. NQ/MNQ), 5m-Chart, optional „Nur Short“**:
+drei Jahre in Folge positiv, kleiner Drawdown, robuste Kosten. Einschränkungen: nur ~3 Jahre Daten,
+N=2 ist schmal, die letzten 3 Monate leicht negativ. Das reicht für **Paper-Trading**, nicht für
+echtes Kapital.
+
 ## Nächste Schritte
 
-1. `DualThrust_Strategy.pine` auf ES1!/NQ1! und SPY/QQQ, 5m und 30m, mit **mehreren Jahren** Historie
-   im Strategy Tester laufen lassen (Slippage 1 Tick einstellen). Kriterium: PF > 1,2 in jedem
-   einzelnen Jahr, sonst verwerfen.
-2. Im IB/ORB-Script den ORB-Exit von 1R auf 2R/EOD umstellen und als Variante eine
-   Vortages-Range-Schwelle testen.
-3. Harness erneut laufen lassen, sobald neue Daten vorliegen (Walk-forward):
-   `python3 research/run_setups.py AMEX_SPY_30m NASDAQ_QQQ_30m` und `python3 research/run_dual_thrust.py`.
+1. `DualThrust_Strategy.pine` auf **NQ1!/MNQ1! und QQQ, 5m**, Richtung „Long & Short“ und
+   „Nur Short“, im Strategy Tester mit maximaler Historie (Deep Backtesting, ab 2020) prüfen;
+   Slippage 1 Tick. Kriterium: PF > 1,2 in jedem Jahr. Das deckt auch 2020–2022 ab, wo die
+   MCP keine Daten liefert.
+2. Bei Bestätigung: 4–8 Wochen Paper-Trading mit TradingView-Alerts (1 MNQ).
+3. IB/ORB-Script: nicht weiter optimieren – keine Variante war robust.
+4. Harness monatlich mit frischen MCP-Daten wiederholen (Walk-forward):
+   `python3 research/run_dt_years.py NASDAQ_QQQ_1h` und `python3 research/run_dt_short.py NASDAQ_QQQ_1h`.
 
 *Keine Anlageberatung. Backtests auf 5000-Bar-Fenstern sind statistisch dünn und garantieren nichts.*

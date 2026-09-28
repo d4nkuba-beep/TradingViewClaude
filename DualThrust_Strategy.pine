@@ -9,10 +9,10 @@
 //    - Stop-and-Reverse: wird die Gegenlinie gerissen, dreht die Position
 //    - Alle Positionen werden vor Handelsschluss glattgestellt
 //
-//  Research (research/ANALYSE.md): N=2, K=0.5 war im Bar-Backtest über
-//  TradingView-MCP-Daten (SPY/QQQ 30m, 03/2025–09/2026) der einzige Kandidat
-//  mit stabilem Parameter-Plateau – in den letzten 3 Monaten aber negativ.
-//  Hier im Strategy Tester mit längerer Historie gegenprüfen!
+//  Research (research/ANALYSE.md): N=2, K=0.5 auf QQQ 2023–2026 in jedem Jahr
+//  positiv (PF ~1,4), Edge v. a. auf der Short-Seite; auf DIA/IWM keine Edge.
+//  Empfohlen: QQQ bzw. NQ/MNQ, 5-Minuten-Chart (die erste RTH-Kerze ist nicht
+//  handelbar, auf 5m ohne Effekt). Vor Echtgeld mit Deep Backtesting prüfen!
 // ════════════════════════════════════════════════════════════════════════════
 strategy("Dual Thrust Intraday (RTH)", shorttitle="DualThrust",
      overlay=true, initial_capital=25000,

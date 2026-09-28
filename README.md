@@ -79,13 +79,17 @@ Range der letzten N RTH-Tage, Stop-Buy bei `Open + K1·Range`, Stop-Sell bei
 **[research/ANALYSE.md](research/ANALYSE.md)**.
 
 Kurz: Unsere IB-Retrace- und ORB-1R-Setups sind auf diesen Daten nicht
-profitabel; Dual Thrust (N=2, K=0,5) ist der einzige robuste Kandidat und
-sollte im Strategy Tester mit längerer Historie bestätigt werden.
+profitabel. Dual Thrust (N=2, K=0,5) ist auf QQQ 2023–2026 in jedem Jahr
+positiv (Edge v. a. Short-Seite), auf DIA/IWM nicht → Kandidat für
+Paper-Trading auf QQQ/NQ im 5m-Chart, nach Bestätigung per Deep Backtesting.
 
 ```bash
 pip install pandas numpy
 python3 research/run_setups.py AMEX_SPY_30m NASDAQ_QQQ_30m
 python3 research/run_dual_thrust.py
+python3 research/run_dt_years.py      # 1h, ~3 Jahre, je Jahr
+python3 research/run_dt_short.py      # Long/Short-Zerlegung
+python3 research/run_dt_checks.py     # Auflösung, N-Sensitivität
 ```
 
 Neue Daten: `mcp-tv-get-ohlcv` (count=5000) aufrufen und die `bars` als
