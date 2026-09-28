@@ -1,5 +1,5 @@
 //@version=6
-// ORB Fakeout Fade GOLD M5 v1.3 - NY Open Range / Fakeout
+// ORB Fakeout Fade GOLD M5 v1.4 - NY Open Range / Fakeout
 // Symbol: GC1! / MGC1!  |  Chart-Timeframe: 5 Minuten
 // Setup A: Fakeout-Fade (Ausbruch scheitert -> zurueck in Range)
 // Setup B: Breakout-Akzeptanz (N Closes ausserhalb -> Continuation)
@@ -10,7 +10,10 @@
 //       Ziel = weiteres von Range-Mitte und 1R, Fade nur mit
 //       VWAP-Bestaetigung. Einzige getestete Variante, die auf allen
 //       8 Datensaetzen positiv war. Setup B bleibt aus (verlor ueberall).
-strategy("ORB Fakeout Fade GOLD M5 v1.3", overlay = true,
+// v1.4: Nur Gold zaehlt -> Defaults zurueck auf v1.1-Verhalten (Ziel
+//       Mitte, RR 1.5, VWAP-Filter aus); auf GC 5m/15m war das besser.
+//       "Mitte/RR max" + VWAP bleiben als Option.
+strategy("ORB Fakeout Fade GOLD M5 v1.4", overlay = true,
      process_orders_on_close = true,
      default_qty_type = strategy.fixed, default_qty_value = 1,
      commission_type = strategy.commission.cash_per_contract,
@@ -32,10 +35,10 @@ maxExc  = input.float(1.0, "Max Fakeout (x Range)", 0.1,
      step = 0.1, group = gA)
 depth   = input.float(0.0, "Min. Rueckkehr in Range (x Range)", 0.0,
      step = 0.05, group = gA)
-tpMode  = input.string("Mitte/RR max", "Ziel",
-     ["Mitte/RR max", "Mitte", "Gegenseite", "RR"], group = gA,
+tpMode  = input.string("Mitte", "Ziel",
+     ["Mitte", "Mitte/RR max", "Gegenseite", "RR"], group = gA,
      tooltip = "Mitte/RR max: das weiter entfernte Ziel von Range-Mitte und RR")
-rrA     = input.float(1.0, "RR (Ziel=RR / Mitte/RR max)", 0.5,
+rrA     = input.float(1.5, "RR (Ziel=RR / Mitte/RR max)", 0.5,
      step = 0.25, group = gA)
 gB      = "Setup B: Breakout-Akzeptanz"
 useCont = input.bool(false, "Setup B aktiv", group = gB)
@@ -51,7 +54,7 @@ atrMin  = input.float(0.15, "min", 0.0, step = 0.05, group = gF,
 atrMax  = input.float(0.60, "max", 0.0, step = 0.05, group = gF,
      inline = "atr")
 atrLen  = input.int(14, "ATR-Laenge (Tage)", 1, group = gF)
-useVwA  = input.bool(true, "A: Close auf richtiger VWAP-Seite",
+useVwA  = input.bool(false, "A: Close auf richtiger VWAP-Seite",
      group = gF)
 useVwB  = input.bool(false, "B: nur in VWAP-Richtung", group = gF)
 useVolA = input.bool(false, "A: nur schwacher Ausbruch (Vol)",

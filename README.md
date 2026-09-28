@@ -64,7 +64,17 @@ Alle Positionen werden um 15:55–16:00 New York glattgestellt.
 
 ---
 
-# ORB Fakeout Fade GOLD M5 (v1.3)
+# ORB Fakeout Fade GOLD M5 (v1.4)
+
+**v1.4:** Da nur Gold gehandelt wird, stehen die Defaults wieder auf dem
+v1.1-Verhalten (Ziel `Mitte`, RR 1,5, VWAP-Filter aus) – auf GC 5m/15m
+war das im Test besser (+4,2 R / +7,8 R vs. +1,5 R / +3,5 R). Die
+v1.3-Variante unten bleibt als Option (`Mitte/RR max` + VWAP an).
+
+**Schlanke Gold-Version:** `ORB_Fade_GC_M5_v1.1_k2.pine` – v1.1 mit
+„Max Kerzen bis Rückkehr" = 2 (auf GC 5m +5,2 R statt +4,2 R) und dem
+Input **„Kontrakte pro Trade"**, der für Backtest und Webhook-`quantity`
+gilt.
 
 **Datei:** `ORB_Fakeout_Fade_GOLD_M5.pine` · **Chart:** GC1! / MGC1!, 5 Minuten
 · **Alert-Nachricht:** `{{strategy.order.alert_message}}` (TradersPost)
@@ -114,8 +124,8 @@ ist trotzdem klein – vor Live-Einsatz im TradingView Strategy Tester
 
 | Filter / Option | Wirkung |
 |---|---|
-| **Ziel** | `Mitte/RR max` (Default), `Mitte`, `Gegenseite`, `RR` |
-| **A: VWAP-Seite** (Default an) | Short-Fade nur mit Close < VWAP, Long nur mit Close > VWAP |
+| **Ziel** | `Mitte` (Default), `Mitte/RR max` (v1.3), `Gegenseite`, `RR` |
+| **A: VWAP-Seite** (Default aus, v1.3: an) | Short-Fade nur mit Close < VWAP, Long nur mit Close > VWAP |
 | A: Min. RR | Kein Fade, wenn Ziel/Risiko < x (laut Backtest nicht empfohlen) |
 | Min. Rückkehr in Range | Close muss x·Range innerhalb liegen |
 | Range-Größe / Tages-ATR | Nur handeln, wenn OR zwischen min·ATR und max·ATR |
